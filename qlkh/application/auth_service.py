@@ -7,7 +7,7 @@ adapter hạ tầng hiện thực sau.
 Threat refs: QLKH-T-04 (liệt kê tài khoản / brute-force), QLKH-T-03 (phiên cũ
 của tài khoản bị vô hiệu hóa), QLKH-T-13 (DoS).
 
-Ba khiếm khuyết của vòng trước được xử lý ở đây:
+Các khiếm khuyết của vòng trước được xử lý ở đây:
 - SD-28: mã băm dummy là mã băm argon2id THẬT sinh lúc khởi động bằng cùng
   tham số, nên nhánh "tài khoản không tồn tại" tốn đúng một lần KDF như nhánh
   tài khoản tồn tại (test đo chênh lệch thời gian).
@@ -16,6 +16,9 @@ Ba khiếm khuyết của vòng trước được xử lý ở đây:
   phải tiêm bản dựa trên session store P2 (Redis) — xem `require_shared_store`.
 - SD-30: chính sách IP tách khỏi chính sách tài khoản, dùng throttle backoff
   chứ không khóa cứng.
+- SD-35: khi đã bị khóa, dịch vụ VẪN chạy đủ một lần KDF trước khi trả 429, và
+  bộ đếm tăng cho cả email không tồn tại, nên phản hồi 429 giống hệt nhau giữa
+  email tồn tại và không tồn tại (không còn kênh phụ liệt kê tài khoản).
 """
 
 from __future__ import annotations
@@ -225,7 +228,12 @@ class AuthService:
     def _account_key(email: str) -> str:
         return email.strip().lower()
 
-    def _assert_not_locked(self, email: str, ip: str) -> None:
+    def _locked_retry_after(self, email: str, ip: str) -> int | None:
+        """Trả Retry-After nếu đang bị khóa/throttle, không ném lỗi tại chỗ.
+
+        Người gọi phải hoàn tất công việc KDF trước khi trả 429 (SD-35), nếu
+        không thì thời gian phản hồi lộ ra tài khoản có tồn tại hay không.
+        """
         now = self._clock()
         for store, key in (
             (self._account_attempts, self._account_key(email)),
@@ -233,7 +241,8 @@ class AuthService:
         ):
             retry_after = store.retry_after(key, now)
             if retry_after is not None:
-                raise AccountLocked(retry_after)
+                return retry_after
+        return None
 
     def _register_failure(self, email: str, ip: str) -> None:
         now = self._clock()
@@ -254,14 +263,20 @@ class AuthService:
     ) -> Session:
         """Trả Session khi thành công; ném AuthError với Problem đồng nhất khi hỏng.
 
-        Không phân biệt nguyên nhân trong thông điệp trả ra ngoài (T-04), và
-        không phân biệt qua thời gian phản hồi (SD-28).
+        Không phân biệt nguyên nhân trong thông điệp trả ra ngoài (T-04), không
+        phân biệt qua thời gian phản hồi (SD-28), và không phân biệt qua việc
+        có bị khóa hay không (SD-35): bộ đếm tăng cho cả email không tồn tại nên
+        cùng số lần sai sẽ cho cùng một phản hồi 429.
         """
-        self._assert_not_locked(email, ip)
+        locked_retry_after = self._locked_retry_after(email, ip)
 
         user = self._users.get_by_email(email.strip().lower())
         password_hash = self._dummy_hash if user is None else user.password_hash
+        # Luôn chạy đúng một lần KDF, kể cả khi đã biết là bị khóa (SD-35).
         password_ok = self._hasher.verify(password_hash, password)
+
+        if locked_retry_after is not None:
+            raise AccountLocked(locked_retry_after)
 
         if user is None or not password_ok or not user.is_active:
             self._register_failure(email, ip)

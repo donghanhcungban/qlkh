@@ -1,14 +1,17 @@
-"""Bộ đếm lần sai dùng chung trên session store P2 (Redis) — đóng SD-29 (a).
+"""Bộ đếm lần sai dùng chung trên session store P2 (Redis) — SD-29.
 
 Không import client Redis cụ thể: adapter làm việc qua Protocol
-`AtomicCounterClient`, thao tác đếm là nguyên tử (INCR + EXPIRE) nên ngưỡng
-chống brute-force KHÔNG bị nhân theo số worker (giả định bảo mật #2 của
-threat-model, T-04/T-13).
+`AtomicCounterClient`, thao tác đếm là nguyên tử nên ngưỡng chống brute-force
+KHÔNG bị nhân theo số worker (giả định bảo mật #2 của threat-model, T-04/T-13).
 
-Ánh xạ sang lệnh Redis thật (adapter hạ tầng hiện thực Protocol này):
-- `incr_with_expiry` → `INCR key` + `EXPIRE key ttl NX` (hoặc script Lua).
+Hiện thực trên Redis thật: `qlkh.infrastructure.redis_counter_client.
+RedisScriptCounterClient` — mỗi thao tác là MỘT lệnh `EVAL` script Lua, nên TTL
+được đặt cùng lúc với INCR (đóng phần "TTL chưa nguyên tử" của SD-29).
+
+Ánh xạ ngữ nghĩa:
+- `incr_with_expiry` → INCR + EXPIRE nếu chưa có TTL, trong một lần thực thi.
 - `set_lock` → `SET key 1 EX ttl`.
-- `lock_ttl` → `TTL key` (None nếu khóa không tồn tại).
+- `lock_ttl` → `TTL key` (None nếu khóa không tồn tại hoặc không có TTL).
 - `delete` → `DEL`.
 """
 
