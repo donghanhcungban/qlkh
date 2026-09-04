@@ -161,6 +161,8 @@ def _meta(**overrides):
         "legal_basis": "dong_y_cua_cha_me",
         "purpose": "cung_cap_dich_vu_dao_tao",
         "retention_days": 730,
+        "retention_anchor": "created_at",
+        "enforced_by": "QLKH-014:job_retention_p4",
         "access_roles": ["admin"],
     }
     base.update(overrides)
