@@ -18,10 +18,13 @@ Các khiếm khuyết của vòng trước được xử lý ở đây:
   chứ không khóa cứng.
 - SD-33: khi đăng nhập thành công mà mã băm còn dùng tham số cũ, dịch vụ gọi
   `needs_rehash` và ghi lại mã băm mới qua `on_password_rehash` (nâng dần,
-  ASVS 2.4). Lỗi khi ghi KHÔNG chặn đăng nhập nhưng được log kèm ngữ cảnh.
+  ASVS 2.4). Lỗi khi ghi KHÔNG chặn đăng nhập nhưng phải để lại dấu vết.
 - SD-35: khi đã bị khóa, dịch vụ VẪN chạy đủ một lần KDF trước khi trả 429, và
   bộ đếm tăng cho cả email không tồn tại, nên phản hồi 429 giống hệt nhau giữa
   email tồn tại và không tồn tại (không còn kênh phụ liệt kê tài khoản).
+- Quan sát vòng 5 (threat-model v1.19 mục 6): `_maybe_rehash` bắt Exception
+  rộng nên hỏng âm thầm. Nay mỗi lần hỏng phát metric
+  `METRIC_REHASH_FAILED` qua `MetricsSink` để có alert, ngoài log warning.
 """
 
 from __future__ import annotations
@@ -49,6 +52,15 @@ from qlkh.domain.auth import (
 from qlkh.domain.subject_context import SubjectContext
 
 logger = logging.getLogger(__name__)
+
+#: Tên metric cho alert "nâng dần argon2id đang hỏng âm thầm" (ASVS 2.4).
+METRIC_REHASH_FAILED = "auth_password_rehash_failed_total"
+
+
+class MetricsSink(Protocol):
+    """Đích phát metric. Adapter hạ tầng (OpenTelemetry) hiện thực sau."""
+
+    def increment(self, name: str, value: int = 1) -> None: ...
 
 
 class PasswordHasher(Protocol):
@@ -202,6 +214,7 @@ class AuthService:
         ip_attempts: AttemptStore | None = None,
         require_shared_store: bool = False,
         on_password_rehash: Callable[[str, str], None] | None = None,
+        metrics: MetricsSink | None = None,
     ) -> None:
         self._users = users
         self._sessions = sessions
@@ -210,6 +223,7 @@ class AuthService:
         self._new_session_id = session_id_factory
         self._clock = clock
         self._on_password_rehash = on_password_rehash
+        self._metrics = metrics
         self._account_attempts: AttemptStore = (
             InMemoryAttemptStore(ACCOUNT_POLICY)
             if account_attempts is None
@@ -257,11 +271,22 @@ class AuthService:
         self._account_attempts.register_failure(self._account_key(email), now)
         self._ip_attempts.register_failure(ip, now)
 
+    def _emit(self, metric: str) -> None:
+        """Phát metric; đích metric hỏng không bao giờ ảnh hưởng nghiệp vụ."""
+        if self._metrics is None:
+            return
+        try:
+            self._metrics.increment(metric)
+        except Exception:  # pragma: no cover - phụ thuộc adapter
+            logger.warning("metrics_emit_failed", extra={"metric": metric})
+
     def _maybe_rehash(self, user: UserRecord, password: str) -> None:
         """Nâng tham số KDF khi đăng nhập thành công (SD-33).
 
         Chỉ chạy khi có nơi ghi (`on_password_rehash`); lỗi khi ghi không được
-        làm hỏng đăng nhập của người dùng hợp lệ, nhưng phải để lại dấu vết.
+        làm hỏng đăng nhập của người dùng hợp lệ, nhưng phải để lại dấu vết:
+        log warning KHÔNG chứa PII và một metric đếm được để đặt alert (quan sát
+        vòng 5 — nếu không thì việc nâng dần có thể hỏng vĩnh viễn mà im lặng).
         """
         if self._on_password_rehash is None:
             return
@@ -275,6 +300,7 @@ class AuthService:
                 extra={"user_id": user.user_id},
                 exc_info=True,
             )
+            self._emit(METRIC_REHASH_FAILED)
 
     # ----------------------------------------------------------------- #
     # Luồng chính                                                       #
