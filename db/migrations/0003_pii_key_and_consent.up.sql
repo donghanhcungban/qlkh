@@ -4,6 +4,15 @@
 --     docs/adr/ADR-007-quan-ly-khoa-ma-hoa-cot.md). Schema ràng buộc để không
 --     ghi được plaintext: ciphertext tối thiểu 32 byte và không giải được thành
 --     chuỗi chỉ gồm chữ số/dấu + (dạng số điện thoại thường).
+--
+--     EXPAND PHASE (expand–contract ADR-007):
+--     Cột `phone_key_version` được thêm với giá trị NULL cho phép.
+--     Tầng ứng dụng có trách nhiệm backfill với phiên bản DEK thật từ KMS
+--     (xem docs/db/key-management.md, mục "Quy trình backfill").
+--     SET NOT NULL sẽ được thực hiện ở migration 0004 sau khi backfill hoàn tất.
+--     LÝ DO AN TOÀN: UPDATE hardcode 'v1' mà không có DEK v1 tồn tại trong KMS
+--     sẽ khiến tầng ứng dụng không giải mã được sau khi migration (ADR-007 §3).
+--
 -- M-3 Bảng `consents` chứng minh cơ sở pháp lý `dong_y_cua_cha_me` (NĐ13 Đ.11;
 --     khớp /consents và DELETE /consents/{id} của api-contract v1.0.0).
 -- M-4 Mốc thời gian cho job retention P4 (ticket QLKH-014) trên mọi bảng PII;
@@ -15,13 +24,14 @@
 --
 -- Expand-only, idempotent, rollback: 0003_pii_key_and_consent.down.sql
 
+-- M-1: Thêm cột phiên bản khóa (NULLABLE — expand phase; backfill thực hiện bởi app)
 ALTER TABLE parents ADD COLUMN IF NOT EXISTS phone_key_version text;
-UPDATE parents SET phone_key_version = 'v1' WHERE phone_key_version IS NULL;
-ALTER TABLE parents ALTER COLUMN phone_key_version SET NOT NULL;
+-- KHÔNG có UPDATE hardcode ở đây: phone_key_version = NULL cho đến khi app backfill
+-- với phiên bản DEK thật. SET NOT NULL ở migration 0004 sau backfill.
 
 ALTER TABLE parents DROP CONSTRAINT IF EXISTS parents_phone_key_version_chk;
 ALTER TABLE parents ADD CONSTRAINT parents_phone_key_version_chk
-    CHECK (phone_key_version ~ '^v[0-9]+$');
+    CHECK (phone_key_version IS NULL OR phone_key_version ~ '^v[0-9]+$');
 
 -- Chống ghi plaintext vào cột bytea: ciphertext AES-GCM (nonce 12 + tag 16 + payload)
 -- luôn > 32 byte và không bao giờ giải escape ra chuỗi số điện thoại thuần.
