@@ -17,7 +17,12 @@ from tools.check_authz_tests import missing_authz_tests, pii_operations
 from tools.check_licenses import check as check_licenses
 from tools.check_sbom import main as sbom_main
 from tools.check_sbom import validate as validate_sbom
-from tools.ci_guard import authz_gate_violations, load_workflow, unverified_downloads
+from tools.ci_guard import (
+    authz_gate_violations,
+    load_workflow,
+    unverified_downloads,
+    unverified_downloads_in_steps,
+)
 from tools.verify_download import load_pins
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -172,6 +177,53 @@ def test_tai_ve_co_verify_thi_dat():
 
 def test_workflow_that_khong_con_tai_ve_khong_xac_minh():
     assert unverified_downloads(WORKFLOW_PATH.read_text(encoding="utf-8")) == []
+
+
+# Lớp kiểm thứ hai: theo cấu trúc step, bịt false negative của bản kiểm văn bản.
+
+
+def _steps(*steps):
+    return {"jobs": {"job-a": {"steps": list(steps)}}}
+
+
+def test_step_tai_ve_khong_xac_minh_bi_bat():
+    workflow = _steps({"name": "tải syft", "run": "curl -O https://example.com/x.tar.gz"})
+    problems = unverified_downloads_in_steps(workflow)
+    assert len(problems) == 1
+    assert "tải syft" in problems[0] and "SD-09" in problems[0]
+
+
+def test_step_co_verify_thi_dat():
+    workflow = _steps(
+        {"run": "curl -O https://example.com/x.tar.gz\npython tools/verify_download.py x.tar.gz u"}
+    )
+    assert unverified_downloads_in_steps(workflow) == []
+
+
+def test_step_khong_phai_run_duoc_bo_qua():
+    assert unverified_downloads_in_steps(_steps({"uses": "actions/checkout@abc"})) == []
+
+
+def test_kiem_van_ban_bo_sot_step_dang_name_con_kiem_cau_truc_thi_khong():
+    """False negative thật của bản cắt chuỗi theo `- run:` (lý do có lớp thứ hai)."""
+    text = (
+        "- run: |\n"
+        "    python tools/verify_download.py a.tar.gz u\n"
+        "- name: cài công cụ\n"
+        "  run: |\n"
+        "    curl -sSL -o b.tar.gz https://example.com/b.tar.gz\n"
+    )
+    assert unverified_downloads(text) == []  # bị bỏ sót
+    workflow = _steps(
+        {"run": "python tools/verify_download.py a.tar.gz u"},
+        {"name": "cài công cụ", "run": "curl -sSL -o b.tar.gz https://example.com/b.tar.gz"},
+    )
+    assert len(unverified_downloads_in_steps(workflow)) == 1
+
+
+def test_workflow_that_khong_con_tai_ve_khong_xac_minh_theo_step():
+    workflow, _ = load_workflow(WORKFLOW_PATH)
+    assert unverified_downloads_in_steps(workflow) == []
 
 
 def test_pins_file_doc_duoc_va_phu_moi_url_trong_workflow():

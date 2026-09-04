@@ -1,12 +1,16 @@
 """Fitness function cho chính workflow CI (SD-01, SD-09).
 
-Hai bất biến được kiểm bằng test, không dựa vào trí nhớ của người review:
+Ba bất biến được kiểm bằng test, không dựa vào trí nhớ của người review:
 
 1. `authz-gate` chỉ được phép `continue-on-error: true` khi CHƯA có OpenAPI spec
    hoặc spec chưa có operation nào chạm PII. Endpoint PII đầu tiên xuất hiện thì
    cờ này phải biến mất, nếu không build đỏ (kiểm soát của T-01/T-02, RISK-3).
 2. Mọi nhị phân tải bằng `curl` trong workflow phải đi qua
-   `tools/verify_download.py` trước khi được chạy (SD-09).
+   `tools/verify_download.py` trước khi được chạy (SD-09) — kiểm trên văn bản.
+3. Cùng bất biến (2) nhưng kiểm theo CẤU TRÚC từng step đã parse. Bản kiểm văn
+   bản cắt chuỗi theo `- run:` nên một step viết dạng `- name: … / run: |` sẽ bị
+   gộp vào step trước; nếu step trước có `verify_download.py` thì lệnh tải mới
+   lọt cửa. Đây là false negative thật của SD-09, nên có thêm lớp kiểm thứ hai.
 """
 
 from __future__ import annotations
@@ -54,6 +58,29 @@ def unverified_downloads(workflow_text: str) -> list[str]:
         if "verify_download.py" in block:
             continue
         problems.extend(f"{url}: tải về nhưng không xác minh checksum (SD-09)" for url in urls)
+    return problems
+
+
+def unverified_downloads_in_steps(workflow: dict[str, Any]) -> list[str]:
+    """Như `unverified_downloads` nhưng duyệt từng step đã parse.
+
+    Không phụ thuộc cách viết step (`- run:` hay `- name: … / run: |`), nên
+    không bị gộp nhầm hai step liền nhau.
+    """
+    problems: list[str] = []
+    for job_name, job in (workflow.get("jobs") or {}).items():
+        for index, step in enumerate(job.get("steps") or []):
+            script = step.get("run")
+            if not isinstance(script, str):
+                continue
+            urls = DOWNLOAD_URL.findall(script)
+            if not urls or "verify_download.py" in script:
+                continue
+            label = step.get("name") or f"step #{index}"
+            problems.extend(
+                f"{job_name}/{label}: {url} tải về nhưng không xác minh checksum (SD-09)"
+                for url in urls
+            )
     return problems
 
 
