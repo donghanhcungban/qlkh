@@ -13,6 +13,9 @@ code và có test:
    `Argon2idPasswordHasher` sẽ ném RuntimeError rõ nghĩa lúc khởi động, không
    phải lúc người dùng đăng nhập.
 
+Ngoài ra `on_password_rehash` được truyền xuống service để nâng dần tham số
+argon2id khi người dùng đăng nhập thành công (SD-33).
+
 Cách lùi: đặt `QLKH_FEATURE_LOGIN_ARGON2=0` (hoặc bỏ biến môi trường).
 """
 
@@ -65,6 +68,7 @@ def build_auth_service(
     environment: str,
     flags: AuthFeatureFlags | None = None,
     clock: Callable[[], datetime] = utcnow,
+    on_password_rehash: Callable[[str, str], None] | None = None,
 ) -> AuthService:
     """Dựng `AuthService` theo môi trường; sản xuất bị siết cứng.
 
@@ -88,4 +92,5 @@ def build_auth_service(
         account_attempts=account_attempts,
         ip_attempts=ip_attempts,
         require_shared_store=environment == PRODUCTION,
+        on_password_rehash=on_password_rehash,
     )

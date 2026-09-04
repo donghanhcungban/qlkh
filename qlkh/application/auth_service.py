@@ -16,6 +16,9 @@ Các khiếm khuyết của vòng trước được xử lý ở đây:
   phải tiêm bản dựa trên session store P2 (Redis) — xem `require_shared_store`.
 - SD-30: chính sách IP tách khỏi chính sách tài khoản, dùng throttle backoff
   chứ không khóa cứng.
+- SD-33: khi đăng nhập thành công mà mã băm còn dùng tham số cũ, dịch vụ gọi
+  `needs_rehash` và ghi lại mã băm mới qua `on_password_rehash` (nâng dần,
+  ASVS 2.4). Lỗi khi ghi KHÔNG chặn đăng nhập nhưng được log kèm ngữ cảnh.
 - SD-35: khi đã bị khóa, dịch vụ VẪN chạy đủ một lần KDF trước khi trả 429, và
   bộ đếm tăng cho cả email không tồn tại, nên phản hồi 429 giống hệt nhau giữa
   email tồn tại và không tồn tại (không còn kênh phụ liệt kê tài khoản).
@@ -23,6 +26,7 @@ Các khiếm khuyết của vòng trước được xử lý ở đây:
 
 from __future__ import annotations
 
+import logging
 import secrets
 from collections import OrderedDict
 from collections.abc import Callable
@@ -43,6 +47,8 @@ from qlkh.domain.auth import (
     utcnow,
 )
 from qlkh.domain.subject_context import SubjectContext
+
+logger = logging.getLogger(__name__)
 
 
 class PasswordHasher(Protocol):
@@ -195,6 +201,7 @@ class AuthService:
         account_attempts: AttemptStore | None = None,
         ip_attempts: AttemptStore | None = None,
         require_shared_store: bool = False,
+        on_password_rehash: Callable[[str, str], None] | None = None,
     ) -> None:
         self._users = users
         self._sessions = sessions
@@ -202,6 +209,7 @@ class AuthService:
         self._mfa = mfa
         self._new_session_id = session_id_factory
         self._clock = clock
+        self._on_password_rehash = on_password_rehash
         self._account_attempts: AttemptStore = (
             InMemoryAttemptStore(ACCOUNT_POLICY)
             if account_attempts is None
@@ -249,6 +257,25 @@ class AuthService:
         self._account_attempts.register_failure(self._account_key(email), now)
         self._ip_attempts.register_failure(ip, now)
 
+    def _maybe_rehash(self, user: UserRecord, password: str) -> None:
+        """Nâng tham số KDF khi đăng nhập thành công (SD-33).
+
+        Chỉ chạy khi có nơi ghi (`on_password_rehash`); lỗi khi ghi không được
+        làm hỏng đăng nhập của người dùng hợp lệ, nhưng phải để lại dấu vết.
+        """
+        if self._on_password_rehash is None:
+            return
+        if not self._hasher.needs_rehash(user.password_hash):
+            return
+        try:
+            self._on_password_rehash(user.user_id, self._hasher.hash(password))
+        except Exception:
+            logger.warning(
+                "password_rehash_failed",
+                extra={"user_id": user.user_id},
+                exc_info=True,
+            )
+
     # ----------------------------------------------------------------- #
     # Luồng chính                                                       #
     # ----------------------------------------------------------------- #
@@ -292,6 +319,7 @@ class AuthService:
                 raise InvalidCredentials()
 
         self._account_attempts.reset(self._account_key(email))
+        self._maybe_rehash(user, password)
 
         now = self._clock()
         session = Session(
