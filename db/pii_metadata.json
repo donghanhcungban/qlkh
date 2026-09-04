@@ -1,0 +1,97 @@
+{
+  "requirement_id": "REQ-002",
+  "ticket_id": "QLKH-002",
+  "legal_reference": "Nghị định 13/2023/NĐ-CP; NFR-006, NFR-007, T-11",
+  "columns": [
+    {
+      "table": "users",
+      "column": "email",
+      "classification": "pii",
+      "legal_basis": "thuc_hien_hop_dong",
+      "purpose": "dinh_danh_dang_nhap",
+      "retention_days": 730,
+      "access_roles": ["admin", "staff"],
+      "protection": "masked_in_logs"
+    },
+    {
+      "table": "users",
+      "column": "password_hash",
+      "classification": "credential",
+      "legal_basis": "thuc_hien_hop_dong",
+      "purpose": "xac_thuc",
+      "retention_days": 730,
+      "access_roles": ["system"],
+      "protection": "argon2id_hash"
+    },
+    {
+      "table": "teachers",
+      "column": "full_name",
+      "classification": "pii",
+      "legal_basis": "thuc_hien_hop_dong",
+      "purpose": "quan_ly_giang_day",
+      "retention_days": 730,
+      "access_roles": ["admin", "staff"],
+      "protection": "masked_in_logs"
+    },
+    {
+      "table": "students",
+      "column": "full_name",
+      "classification": "pii_tre_em",
+      "legal_basis": "dong_y_cua_cha_me",
+      "purpose": "cung_cap_dich_vu_dao_tao",
+      "retention_days": 730,
+      "access_roles": ["admin", "staff", "teacher_phu_trach", "parent_cua_hoc_vien"],
+      "protection": "masked_in_logs"
+    },
+    {
+      "table": "students",
+      "column": "date_of_birth",
+      "classification": "pii_tre_em",
+      "legal_basis": "dong_y_cua_cha_me",
+      "purpose": "xep_lop_theo_do_tuoi",
+      "retention_days": 730,
+      "access_roles": ["admin", "staff", "teacher_phu_trach", "parent_cua_hoc_vien"],
+      "protection": "masked_in_logs"
+    },
+    {
+      "table": "parents",
+      "column": "full_name",
+      "classification": "pii",
+      "legal_basis": "thuc_hien_hop_dong",
+      "purpose": "lien_he_ve_hoc_vien",
+      "retention_days": 730,
+      "access_roles": ["admin", "staff"],
+      "protection": "masked_in_logs"
+    },
+    {
+      "table": "parents",
+      "column": "phone_enc",
+      "classification": "pii",
+      "legal_basis": "thuc_hien_hop_dong",
+      "purpose": "gui_thong_bao_va_otp",
+      "retention_days": 730,
+      "access_roles": ["system"],
+      "protection": "encrypted_at_rest"
+    },
+    {
+      "table": "parents",
+      "column": "phone_last4",
+      "classification": "pii_derived",
+      "legal_basis": "thuc_hien_hop_dong",
+      "purpose": "hien_thi_che_so_dien_thoai",
+      "retention_days": 730,
+      "access_roles": ["admin", "staff", "parent_cua_hoc_vien"],
+      "protection": "masked_value"
+    },
+    {
+      "table": "parent_student",
+      "column": "relation",
+      "classification": "pii",
+      "legal_basis": "dong_y_cua_cha_me",
+      "purpose": "xac_dinh_quan_he_giam_ho",
+      "retention_days": 730,
+      "access_roles": ["admin", "staff"],
+      "protection": "none"
+    }
+  ]
+}
