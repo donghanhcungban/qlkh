@@ -5,9 +5,12 @@ Thuần domain: không import ORM/HTTP/framework (fitness function kiểm bằng
 Nguyên tắc:
 - Thông điệp lỗi đăng nhập ĐỒNG NHẤT cho mọi nguyên nhân (không tồn tại, sai
   mật khẩu, tài khoản bị vô hiệu hóa, thiếu/sai MFA) — chống liệt kê tài khoản
-  (threat QLKH-T-04).
-- Khóa tạm 15 phút sau 5 lần sai trong 15 phút, tính theo tài khoản VÀ theo IP.
-- Phiên máy chủ: thu hồi tức thì khi tài khoản bị vô hiệu hóa (QLKH-T-03).
+  (threat QLKH-T-04). Kể cả kênh phụ thời gian: xem `AuthService._dummy_hash`.
+- Khóa tạm theo TÀI KHOẢN: 5 lần sai trong 15 phút → khóa 15 phút.
+- Theo IP: KHÔNG khóa cứng (gây DoS người dùng hợp lệ sau NAT — SD-30). Dùng
+  ngưỡng cao hơn nhiều bậc + backoff tăng dần (throttle) với Retry-After ngắn.
+- Phiên máy chủ: thu hồi tức thì khi tài khoản bị vô hiệu hóa (QLKH-T-03);
+  mỗi request còn kiểm lại `is_active` của chủ phiên (SD-31).
 - MFA bắt buộc cho vai trò admin.
 """
 
@@ -19,10 +22,17 @@ from typing import Literal
 
 Role = Literal["parent", "teacher", "staff", "admin"]
 
-# Chính sách khóa tạm (NFR-002)
+# --- Chính sách theo tài khoản (NFR-002) ------------------------------- #
 MAX_FAILED_ATTEMPTS = 5
 FAILURE_WINDOW = timedelta(minutes=15)
 LOCKOUT_DURATION = timedelta(minutes=15)
+
+# --- Chính sách theo IP (SD-30) ---------------------------------------- #
+# Ngưỡng cao hơn nhiều bậc vì một IP có thể là NAT của cả trung tâm.
+IP_THROTTLE_THRESHOLD = 50
+IP_FAILURE_WINDOW = timedelta(minutes=15)
+IP_BACKOFF_BASE = timedelta(seconds=2)
+IP_BACKOFF_MAX = timedelta(seconds=60)
 
 # Vòng đời phiên máy chủ
 SESSION_TTL = timedelta(hours=12)
@@ -106,31 +116,90 @@ SESSION_COOKIE_ATTRS: dict[str, object] = {
 }
 
 
+@dataclass(frozen=True)
+class AttemptPolicy:
+    """Chính sách đếm lần sai. `mode` phân biệt khóa cứng và throttle.
+
+    - `lock`: đạt ngưỡng → chặn trọn `lockout` (dùng cho TÀI KHOẢN).
+    - `throttle`: vượt ngưỡng → Retry-After tăng dần theo cấp số nhân, có trần;
+      không khóa cứng để một IP dùng chung không làm DoS người dùng hợp lệ.
+    """
+
+    threshold: int
+    window: timedelta
+    mode: Literal["lock", "throttle"] = "lock"
+    lockout: timedelta = LOCKOUT_DURATION
+    backoff_base: timedelta = IP_BACKOFF_BASE
+    backoff_max: timedelta = IP_BACKOFF_MAX
+
+
+ACCOUNT_POLICY = AttemptPolicy(
+    threshold=MAX_FAILED_ATTEMPTS,
+    window=FAILURE_WINDOW,
+    mode="lock",
+    lockout=LOCKOUT_DURATION,
+)
+IP_POLICY = AttemptPolicy(
+    threshold=IP_THROTTLE_THRESHOLD,
+    window=IP_FAILURE_WINDOW,
+    mode="throttle",
+)
+
+
 @dataclass
 class FailureCounter:
     """Đếm lần sai trong cửa sổ trượt cho một khóa (tài khoản hoặc IP)."""
 
+    policy: AttemptPolicy = ACCOUNT_POLICY
     timestamps: list[datetime] = field(default_factory=list)
     locked_until: datetime | None = None
+    last_seen: datetime | None = None
 
     def prune(self, now: datetime) -> None:
-        cutoff = now - FAILURE_WINDOW
-        self.timestamps = [t for t in self.timestamps if t > cutoff]
+        cutoff = now - self.policy.window
+        # `>=` để không loại nhầm lần sai đúng ở biên cửa sổ.
+        self.timestamps = [t for t in self.timestamps if t >= cutoff]
 
     def register_failure(self, now: datetime) -> None:
         self.prune(now)
         self.timestamps.append(now)
-        if len(self.timestamps) >= MAX_FAILED_ATTEMPTS:
-            self.locked_until = now + LOCKOUT_DURATION
+        self.last_seen = now
+        if self.policy.mode == "lock" and len(self.timestamps) >= self.policy.threshold:
+            self.locked_until = now + self.policy.lockout
 
     def retry_after(self, now: datetime) -> int | None:
-        if self.locked_until is None:
+        """Số giây phải chờ, hoặc None nếu được phép thử."""
+        if self.policy.mode == "lock":
+            if self.locked_until is None:
+                return None
+            if now >= self.locked_until:
+                # Hết khóa: xóa hẳn trạng thái để bắt đầu cửa sổ mới.
+                self.locked_until = None
+                self.timestamps = []
+                return None
+            return max(1, int((self.locked_until - now).total_seconds()))
+
+        # throttle
+        self.prune(now)
+        excess = len(self.timestamps) - self.policy.threshold
+        if excess < 0 or not self.timestamps:
             return None
-        if now >= self.locked_until:
-            self.locked_until = None
-            self.timestamps = []
+        delay = min(
+            self.policy.backoff_max,
+            self.policy.backoff_base * (2 ** min(excess, 16)),
+        )
+        elapsed = now - self.timestamps[-1]
+        remaining = delay - elapsed
+        if remaining <= timedelta(0):
             return None
-        return max(1, int((self.locked_until - now).total_seconds()))
+        return max(1, int(remaining.total_seconds()))
+
+    def is_expired(self, now: datetime) -> bool:
+        """Không còn giá trị bảo mật → có thể thu hồi khỏi bộ nhớ (SD-29)."""
+        if self.locked_until is not None and now < self.locked_until:
+            return False
+        self.prune(now)
+        return not self.timestamps
 
     def reset(self) -> None:
         self.timestamps = []

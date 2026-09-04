@@ -5,19 +5,34 @@ api-contract v1.0.0. Không import ORM/HTTP: mọi phụ thuộc là Protocol,
 adapter hạ tầng hiện thực sau.
 
 Threat refs: QLKH-T-04 (liệt kê tài khoản / brute-force), QLKH-T-03 (phiên cũ
-của tài khoản bị vô hiệu hóa).
+của tài khoản bị vô hiệu hóa), QLKH-T-13 (DoS).
+
+Ba khiếm khuyết của vòng trước được xử lý ở đây:
+- SD-28: mã băm dummy là mã băm argon2id THẬT sinh lúc khởi động bằng cùng
+  tham số, nên nhánh "tài khoản không tồn tại" tốn đúng một lần KDF như nhánh
+  tài khoản tồn tại (test đo chênh lệch thời gian).
+- SD-29: bộ đếm nằm sau `AttemptStore`. Bản in-memory CÓ GIỚI HẠN kích thước và
+  tự dọn mục hết hạn; nó chỉ hợp lệ cho tiến trình đơn (dev/test). Sản xuất
+  phải tiêm bản dựa trên session store P2 (Redis) — xem `require_shared_store`.
+- SD-30: chính sách IP tách khỏi chính sách tài khoản, dùng throttle backoff
+  chứ không khóa cứng.
 """
 
 from __future__ import annotations
 
+import secrets
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Protocol
 
 from qlkh.domain.auth import (
+    ACCOUNT_POLICY,
+    IP_POLICY,
     MFA_REQUIRED_ROLES,
     SESSION_TTL,
     AccountLocked,
+    AttemptPolicy,
     FailureCounter,
     InvalidCredentials,
     Session,
@@ -40,6 +55,8 @@ class PasswordHasher(Protocol):
 class UserRepository(Protocol):
     def get_by_email(self, email: str) -> UserRecord | None: ...
 
+    def get_by_id(self, user_id: str) -> UserRecord | None: ...
+
 
 class SessionStore(Protocol):
     def create(self, session: Session) -> None: ...
@@ -55,12 +72,87 @@ class MfaVerifier(Protocol):
     def verify(self, secret: str, code: str) -> bool: ...
 
 
+class AttemptStore(Protocol):
+    """Bộ đếm lần sai. Sản xuất: hiện thực trên Redis (P2), dùng chung mọi worker."""
+
+    #: True nếu trạng thái dùng chung giữa các tiến trình/replica.
+    shared: bool
+
+    def register_failure(self, key: str, now: datetime) -> None: ...
+
+    def retry_after(self, key: str, now: datetime) -> int | None: ...
+
+    def reset(self, key: str) -> None: ...
+
+
+class InMemoryAttemptStore:
+    """Bộ đếm trong RAM tiến trình — CHỈ dùng cho dev/test (SD-29).
+
+    Có trần số khóa và tự dọn mục hết hạn để không tăng bộ nhớ vô hạn theo số
+    email/IP lạ (ASVS 12.1). Với nhiều worker, ngưỡng thực tế bị nhân lên theo
+    số tiến trình, nên `shared = False` và `AuthService` từ chối khởi tạo ở chế
+    độ sản xuất với store này.
+    """
+
+    shared = False
+
+    def __init__(self, policy: AttemptPolicy, max_keys: int = 10_000) -> None:
+        self._policy = policy
+        self._max_keys = max_keys
+        self._counters: OrderedDict[str, FailureCounter] = OrderedDict()
+
+    def _sweep(self, now: datetime, keep: str | None = None) -> None:
+        expired = [
+            k for k, c in self._counters.items() if k != keep and c.is_expired(now)
+        ]
+        for key in expired:
+            del self._counters[key]
+        # Trần cứng: mục ít dùng nhất bị loại trước (SD-29).
+        while len(self._counters) > self._max_keys:
+            oldest, _ = next(iter(self._counters.items()))
+            if oldest == keep:
+                self._counters.move_to_end(oldest)
+                oldest, _ = next(iter(self._counters.items()))
+            del self._counters[oldest]
+
+    def _counter(self, key: str, now: datetime) -> FailureCounter:
+        counter = self._counters.get(key)
+        if counter is None:
+            counter = FailureCounter(policy=self._policy)
+            self._counters[key] = counter
+        self._counters.move_to_end(key)
+        self._sweep(now, keep=key)
+        return counter
+
+    def register_failure(self, key: str, now: datetime) -> None:
+        self._counter(key, now).register_failure(now)
+
+    def retry_after(self, key: str, now: datetime) -> int | None:
+        return self._counter(key, now).retry_after(now)
+
+    def reset(self, key: str) -> None:
+        self._counters.pop(key, None)
+
+    def __len__(self) -> int:
+        return len(self._counters)
+
+
 class Argon2idPasswordHasher:
     """Adapter argon2id. Yêu cầu gói `argon2-cffi` ở runtime.
 
-    Tách riêng để domain không phụ thuộc thư viện; lỗi thiếu gói được nêu rõ
-    thay vì âm thầm rơi về thuật toán yếu.
+    Tham số ghim tường minh (ASVS 2.4.1, SD-33) để mọi môi trường dùng cùng chi
+    phí KDF; đổi tham số thì `needs_rehash` báo để nâng dần khi người dùng đăng
+    nhập.
     """
+
+    #: Ghim tường minh — đổi giá trị là thay đổi có kiểm soát, không mặc định ẩn.
+    DEFAULT_PARAMS: dict[str, int] = {
+        "time_cost": 3,
+        "memory_cost": 65536,  # 64 MiB
+        "parallelism": 4,
+        "hash_len": 32,
+        "salt_len": 16,
+    }
 
     def __init__(self, **params: Any) -> None:
         try:
@@ -70,7 +162,8 @@ class Argon2idPasswordHasher:
                 "Thiếu phụ thuộc 'argon2-cffi' cho băm mật khẩu argon2id "
                 "(ADR-002). Thêm vào requirements trước khi triển khai."
             ) from exc
-        self._ph = _PH(**params) if params else _PH()
+        self.params = {**self.DEFAULT_PARAMS, **params}
+        self._ph = _PH(**self.params)
 
     def hash(self, password: str) -> str:  # pragma: no cover - cần argon2-cffi
         return str(self._ph.hash(password))
@@ -96,6 +189,9 @@ class AuthService:
         mfa: MfaVerifier,
         session_id_factory: Callable[[], str],
         clock: Callable[[], datetime] = utcnow,
+        account_attempts: AttemptStore | None = None,
+        ip_attempts: AttemptStore | None = None,
+        require_shared_store: bool = False,
     ) -> None:
         self._users = users
         self._sessions = sessions
@@ -103,29 +199,46 @@ class AuthService:
         self._mfa = mfa
         self._new_session_id = session_id_factory
         self._clock = clock
-        self._by_account: dict[str, FailureCounter] = {}
-        self._by_ip: dict[str, FailureCounter] = {}
+        self._account_attempts: AttemptStore = (
+            InMemoryAttemptStore(ACCOUNT_POLICY)
+            if account_attempts is None
+            else account_attempts
+        )
+        self._ip_attempts: AttemptStore = (
+            InMemoryAttemptStore(IP_POLICY) if ip_attempts is None else ip_attempts
+        )
+        if require_shared_store and not (
+            self._account_attempts.shared and self._ip_attempts.shared
+        ):
+            raise RuntimeError(
+                "Khóa tạm phải nằm ở store dùng chung (session store P2) khi chạy "
+                "nhiều tiến trình/replica — SD-29."
+            )
+        # SD-28: mã băm dummy THẬT, cùng tham số, sinh một lần lúc khởi động.
+        self._dummy_hash = hasher.hash(secrets.token_urlsafe(32))
 
     # ----------------------------------------------------------------- #
     # Khóa tạm                                                          #
     # ----------------------------------------------------------------- #
 
-    def _counters(self, email: str, ip: str) -> tuple[FailureCounter, FailureCounter]:
-        account = self._by_account.setdefault(email.strip().lower(), FailureCounter())
-        by_ip = self._by_ip.setdefault(ip, FailureCounter())
-        return account, by_ip
+    @staticmethod
+    def _account_key(email: str) -> str:
+        return email.strip().lower()
 
     def _assert_not_locked(self, email: str, ip: str) -> None:
         now = self._clock()
-        for counter in self._counters(email, ip):
-            retry_after = counter.retry_after(now)
+        for store, key in (
+            (self._account_attempts, self._account_key(email)),
+            (self._ip_attempts, ip),
+        ):
+            retry_after = store.retry_after(key, now)
             if retry_after is not None:
                 raise AccountLocked(retry_after)
 
     def _register_failure(self, email: str, ip: str) -> None:
         now = self._clock()
-        for counter in self._counters(email, ip):
-            counter.register_failure(now)
+        self._account_attempts.register_failure(self._account_key(email), now)
+        self._ip_attempts.register_failure(ip, now)
 
     # ----------------------------------------------------------------- #
     # Luồng chính                                                       #
@@ -141,22 +254,16 @@ class AuthService:
     ) -> Session:
         """Trả Session khi thành công; ném AuthError với Problem đồng nhất khi hỏng.
 
-        Không phân biệt nguyên nhân trong thông điệp trả ra ngoài (T-04).
+        Không phân biệt nguyên nhân trong thông điệp trả ra ngoài (T-04), và
+        không phân biệt qua thời gian phản hồi (SD-28).
         """
         self._assert_not_locked(email, ip)
 
         user = self._users.get_by_email(email.strip().lower())
-        if user is None:
-            # Vẫn tốn thời gian băm để giảm chênh lệch thời gian phản hồi.
-            self._hasher.verify("$argon2id$dummy", password)
-            self._register_failure(email, ip)
-            raise InvalidCredentials()
+        password_hash = self._dummy_hash if user is None else user.password_hash
+        password_ok = self._hasher.verify(password_hash, password)
 
-        if not self._hasher.verify(user.password_hash, password):
-            self._register_failure(email, ip)
-            raise InvalidCredentials()
-
-        if not user.is_active:
+        if user is None or not password_ok or not user.is_active:
             self._register_failure(email, ip)
             raise InvalidCredentials()
 
@@ -169,9 +276,7 @@ class AuthService:
                 self._register_failure(email, ip)
                 raise InvalidCredentials()
 
-        account, by_ip = self._counters(email, ip)
-        account.reset()
-        by_ip.reset()
+        self._account_attempts.reset(self._account_key(email))
 
         now = self._clock()
         session = Session(
@@ -192,13 +297,18 @@ class AuthService:
     def resolve_session(self, session_id: str | None) -> Session:
         """Trả phiên hợp lệ hoặc ném InvalidCredentials (401).
 
-        Phiên của tài khoản bị vô hiệu hóa đã bị thu hồi khỏi session store nên
-        bị từ chối NGAY ở request kế tiếp (QLKH-T-03).
+        Ngoài việc thu hồi phiên khi vô hiệu hóa tài khoản, mỗi request còn kiểm
+        lại `is_active` của chủ phiên để không phụ thuộc vào một điểm gọi duy
+        nhất (QLKH-T-03, SD-31).
         """
         if not session_id:
             raise InvalidCredentials()
         session = self._sessions.get(session_id)
         if session is None or not session.is_valid_at(self._clock()):
+            raise InvalidCredentials()
+        user = self._users.get_by_id(session.user_id)
+        if user is None or not user.is_active:
+            self.revoke_all_sessions(session.user_id)
             raise InvalidCredentials()
         return session
 
@@ -223,3 +333,12 @@ class AuthService:
     def revoke_all_sessions(self, user_id: str) -> int:
         """Thu hồi toàn bộ phiên của một tài khoản (khi vô hiệu hóa)."""
         return self._sessions.delete_all_for_user(user_id)
+
+    def deactivate_account(self, user_id: str, deactivate: Callable[[str], Any]) -> int:
+        """Điểm gọi tường minh của luồng vô hiệu hóa: đổi trạng thái rồi thu hồi.
+
+        `deactivate` là thao tác ghi của tầng người dùng (repo/usecase khác);
+        service chỉ bảo đảm thu hồi phiên xảy ra ngay sau đó (SD-31).
+        """
+        deactivate(user_id)
+        return self.revoke_all_sessions(user_id)

@@ -1,21 +1,27 @@
 """Test xác thực QLKH-004 / REQ-001 theo tiêu chí Gherkin của ticket.
 
-G1: tài khoản không tồn tại và sai mật khẩu → thông điệp và mã lỗi giống hệt.
-G2: 5 lần sai trong 15 phút → lần 6 bị khóa 15 phút (theo tài khoản và theo IP).
-G3: giáo viên bị vô hiệu hóa dùng phiên cũ → 401 ngay lập tức.
+G1: tài khoản không tồn tại và sai mật khẩu → thông điệp và mã lỗi giống hệt
+    (kể cả thời gian phản hồi — SD-28).
+G2: 5 lần sai trong 15 phút → lần 6 bị khóa 15 phút (theo TÀI KHOẢN); theo IP
+    là throttle backoff ở ngưỡng cao hơn nhiều bậc (SD-30).
+G3: giáo viên bị vô hiệu hóa dùng phiên cũ → 401 ngay lập tức (SD-31).
 G4: tài khoản admin đăng nhập không có MFA → bị từ chối.
 
-Threat refs: QLKH-T-04, QLKH-T-03.
+Threat refs: QLKH-T-04, QLKH-T-03, QLKH-T-13.
 """
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from qlkh.application.auth_service import AuthService
+from qlkh.application.auth_service import AuthService, InMemoryAttemptStore
 from qlkh.domain.auth import (
+    ACCOUNT_POLICY,
+    IP_POLICY,
+    IP_THROTTLE_THRESHOLD,
     LOCKOUT_DURATION,
     MAX_FAILED_ATTEMPTS,
     SESSION_COOKIE_ATTRS,
@@ -55,12 +61,34 @@ class FakeHasher:
         return False
 
 
+class SlowHasher(FakeHasher):
+    """Mô phỏng argon2id: KDF tốn thời gian, mã băm sai định dạng thì trả ngay.
+
+    Đây chính là hành vi của `Argon2idPasswordHasher.verify` (bắt Exception khi
+    parse lỗi) — dùng để phát hiện timing oracle ở nhánh tài khoản không tồn tại.
+    """
+
+    KDF_DELAY = 0.02
+
+    def verify(self, password_hash: str, password: str) -> bool:
+        if not password_hash.startswith("h:"):
+            return False
+        time.sleep(self.KDF_DELAY)
+        return password_hash == f"h:{password}"
+
+
 class FakeUsers:
     def __init__(self, users: list[UserRecord]) -> None:
         self._by_email = {u.email: u for u in users}
 
     def get_by_email(self, email: str) -> UserRecord | None:
         return self._by_email.get(email)
+
+    def get_by_id(self, user_id: str) -> UserRecord | None:
+        for user in self._by_email.values():
+            if user.user_id == user_id:
+                return user
+        return None
 
     def deactivate(self, email: str) -> UserRecord:
         user = self._by_email[email]
@@ -102,6 +130,12 @@ class FakeMfa:
         return code == f"code-{secret}"
 
 
+class SharedAttemptStore(InMemoryAttemptStore):
+    """Giả lập store dùng chung (Redis P2) cho test cấu hình sản xuất."""
+
+    shared = True
+
+
 TEACHER = UserRecord(
     user_id="u-teacher",
     email="teacher@example.vn",
@@ -119,9 +153,8 @@ ADMIN = UserRecord(
 )
 
 
-@pytest.fixture()
-def env():
-    clock = FakeClock()
+def build_service(hasher=None, clock=None, **kwargs):
+    clock = clock or FakeClock()
     users = FakeUsers([TEACHER, ADMIN])
     sessions = FakeSessions()
     counter = {"n": 0}
@@ -133,12 +166,18 @@ def env():
     service = AuthService(
         users=users,
         sessions=sessions,
-        hasher=FakeHasher(),
+        hasher=hasher or FakeHasher(),
         mfa=FakeMfa(),
         session_id_factory=sid,
         clock=clock,
+        **kwargs,
     )
     return service, users, sessions, clock
+
+
+@pytest.fixture()
+def env():
+    return build_service()
 
 
 def test_login_success_creates_server_session(env):
@@ -180,6 +219,22 @@ def test_g1_disabled_account_same_message(env):
     with pytest.raises(AuthError) as unknown:
         service.login(email="nobody@example.vn", password="x" * 12, ip="4.4.4.4")
     assert disabled.value.problem == unknown.value.problem
+
+
+def test_g1_no_timing_oracle_between_unknown_and_existing_account():
+    """SD-28: nhánh không tồn tại phải chạy đúng một lần KDF như nhánh tồn tại."""
+    service, _, _, _ = build_service(hasher=SlowHasher())
+
+    def elapsed(email: str, ip: str) -> float:
+        start = time.perf_counter()
+        with pytest.raises(AuthError):
+            service.login(email=email, password="wrong-pass", ip=ip)
+        return time.perf_counter() - start
+
+    unknown = min(elapsed("nobody@example.vn", f"10.0.0.{i}") for i in range(3))
+    existing = min(elapsed("teacher@example.vn", f"10.0.1.{i}") for i in range(3))
+    # Chênh lệch phải nhỏ hơn nhiều so với chi phí một lần KDF.
+    assert abs(unknown - existing) < SlowHasher.KDF_DELAY / 2
 
 
 def test_g2_lockout_after_five_failures(env):
@@ -225,19 +280,68 @@ def test_g2_failures_outside_window_do_not_lock(env):
     assert session.session_id
 
 
-def test_g2_lockout_applies_per_ip_across_accounts(env):
-    """Khóa theo IP: 5 lần sai trên nhiều email vẫn khóa IP đó."""
+def test_g2_shared_ip_does_not_lock_out_legitimate_user(env):
+    """SD-30: NAT dùng chung — 5 lần người khác gõ sai không được khóa IP."""
     service, _, _, _ = env
     for i in range(MAX_FAILED_ATTEMPTS):
         with pytest.raises(InvalidCredentials):
             service.login(email=f"u{i}@example.vn", password="bad-pass", ip="7.7.7.7")
-    with pytest.raises(AccountLocked):
+    session = service.login(
+        email="teacher@example.vn", password="correct-horse", ip="7.7.7.7"
+    )
+    assert session.user_id == "u-teacher"
+
+
+def test_g2_ip_throttle_is_backoff_not_hard_lock(env):
+    """Vượt ngưỡng IP → chờ vài giây, KHÔNG khóa cứng 15 phút."""
+    service, _, _, clock = env
+    for i in range(IP_THROTTLE_THRESHOLD):
+        with pytest.raises(InvalidCredentials):
+            service.login(
+                email=f"bulk{i}@example.vn", password="bad-pass", ip="7.7.7.8"
+            )
+    with pytest.raises(AccountLocked) as throttled:
         service.login(
-            email="teacher@example.vn", password="correct-horse", ip="7.7.7.7"
+            email="teacher@example.vn", password="correct-horse", ip="7.7.7.8"
         )
-    # IP khác không bị ảnh hưởng
+    assert throttled.value.status == 429
+    assert 0 < throttled.value.retry_after <= 60
+
+    clock.advance(timedelta(seconds=61))
+    session = service.login(
+        email="teacher@example.vn", password="correct-horse", ip="7.7.7.8"
+    )
+    assert session.user_id == "u-teacher"
+
+
+def test_attempt_store_is_bounded_in_size():
+    """SD-29: bộ đếm không được tăng bộ nhớ vô hạn theo số email/IP lạ."""
+    store = InMemoryAttemptStore(IP_POLICY, max_keys=50)
+    now = T0
+    for i in range(500):
+        store.register_failure(f"ip-{i}", now)
+    assert len(store) <= 50
+
+
+def test_attempt_store_evicts_expired_entries():
+    store = InMemoryAttemptStore(ACCOUNT_POLICY, max_keys=1000)
+    store.register_failure("a@example.vn", T0)
+    assert len(store) == 1
+    store.register_failure("b@example.vn", T0 + timedelta(minutes=30))
+    assert len(store) == 1  # mục cũ đã hết hạn và bị dọn
+
+
+def test_production_requires_shared_attempt_store():
+    """SD-29: chạy nhiều replica mà đếm trong RAM tiến trình là cấu hình sai."""
+    with pytest.raises(RuntimeError):
+        build_service(require_shared_store=True)
+    service, _, _, _ = build_service(
+        require_shared_store=True,
+        account_attempts=SharedAttemptStore(ACCOUNT_POLICY),
+        ip_attempts=SharedAttemptStore(IP_POLICY),
+    )
     assert service.login(
-        email="teacher@example.vn", password="correct-horse", ip="8.8.8.8"
+        email="teacher@example.vn", password="correct-horse", ip="1.9.9.9"
     )
 
 
@@ -248,12 +352,27 @@ def test_g3_disabled_user_old_session_rejected_immediately(env):
     )
     assert service.me(session.session_id)["user_id"] == "u-teacher"
 
-    users.deactivate("teacher@example.vn")
-    revoked = service.revoke_all_sessions("u-teacher")
+    revoked = service.deactivate_account(
+        "u-teacher", lambda _uid: users.deactivate("teacher@example.vn")
+    )
     assert revoked == 1
     with pytest.raises(AuthError) as exc:
         service.me(session.session_id)
     assert exc.value.status == 401
+
+
+def test_g3_session_rejected_even_if_revoke_was_missed(env):
+    """SD-31: phiên còn trong store nhưng tài khoản đã tắt → vẫn 401."""
+    service, users, sessions, _ = env
+    session = service.login(
+        email="teacher@example.vn", password="correct-horse", ip="9.9.9.8"
+    )
+    users.deactivate("teacher@example.vn")  # cố ý KHÔNG gọi revoke
+    assert session.session_id in sessions.data
+    with pytest.raises(AuthError) as exc:
+        service.me(session.session_id)
+    assert exc.value.status == 401
+    assert session.session_id not in sessions.data  # đã tự thu hồi
 
 
 def test_g4_admin_without_mfa_rejected(env):
