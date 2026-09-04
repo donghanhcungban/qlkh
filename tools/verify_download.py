@@ -3,15 +3,19 @@
 Dùng:
     python tools/verify_download.py <đường-dẫn-file> <url> [--checksums-url URL]
 
-Hai tầng kiểm, theo `ci/tool-checksums.txt`:
+Quy tắc (theo `ci/tool-checksums.txt`), fail-closed hoàn toàn:
 
-1. URL đã ghim SHA-256 trong repo → so khớp tuyệt đối; lệch là fail.
-2. URL chưa ghim (giá trị `unpinned`) → bắt buộc phải có `--checksums-url` trỏ tới
-   tệp checksums của chính bản phát hành đó; digest thật phải xuất hiện trong tệp
-   này. Trường hợp này in cảnh báo vì pin trong repo vẫn là việc còn mở — nó phát
-   hiện được nhị phân bị tráo lẻ nhưng không chống được kẻ đổi cả hai tệp.
+1. URL không có mục nào trong file pin → fail.
+2. Pin còn là `unpinned` → **fail**. Trước đây trường hợp này chỉ đối chiếu với tệp
+   checksums do chính bản phát hành cung cấp và in cảnh báo; kẻ kiểm soát được
+   release upstream (hoặc MITM) thay được cả hai tệp nên lớp kiểm đó không có giá
+   trị bảo đảm. Nay là lỗi cứng.
+3. Pin là SHA-256 → so khớp tuyệt đối; lệch là fail. `--checksums-url` (nếu có)
+   được dùng như lớp kiểm bổ sung: digest phải xuất hiện trong tệp checksums.
 
-Không có mục nào trong `ci/tool-checksums.txt` cho URL → fail-closed.
+Cách điền digest thật (chạy trên máy có mạng đáng tin cậy):
+    curl -sSL -o f.tar.gz <url> && sha256sum f.tar.gz
+rồi thay `unpinned` bằng giá trị đó trong `ci/tool-checksums.txt`.
 """
 
 from __future__ import annotations
@@ -53,13 +57,14 @@ def verify(digest: str, url: str, pins: dict[str, str], checksums_text: str | No
     if url not in pins:
         return [f"{url}: chưa khai báo trong {PINS_PATH} (fail-closed)"]
     expected = pins[url]
-    if expected != UNPINNED:
-        if digest != expected:
-            return [f"{url}: sha256 {digest} khác giá trị ghim {expected}"]
-        return []
-    if not checksums_text:
-        return [f"{url}: pin là '{UNPINNED}' nhưng thiếu --checksums-url"]
-    if digest not in checksums_text.lower():
+    if expected == UNPINNED:
+        return [
+            f"{url}: pin còn '{UNPINNED}' trong {PINS_PATH} — cần ghim SHA-256 thật "
+            f"(sha256sum) hoặc dùng mirror nội bộ đã ký (SD-09)"
+        ]
+    if digest != expected:
+        return [f"{url}: sha256 {digest} khác giá trị ghim {expected}"]
+    if checksums_text and digest not in checksums_text.lower():
         return [f"{url}: sha256 {digest} không có trong tệp checksums của bản phát hành"]
     return []
 
@@ -86,8 +91,6 @@ def main(argv: list[str] | None = None) -> int:
     errors = verify(sha256_of(path), url, pins, checksums_text)
     for error in errors:
         print(f"verify-download: {error}", file=sys.stderr)
-    if not errors and pins.get(url) == UNPINNED:
-        print(f"verify-download: CẢNH BÁO {url} chưa ghim trong repo (SD-09)", file=sys.stderr)
     return 1 if errors else 0
 
 

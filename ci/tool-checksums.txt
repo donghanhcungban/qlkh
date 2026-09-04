@@ -1,8 +1,16 @@
 # Pin SHA-256 cho nhị phân tải trong CI (SD-09, T-12).
 # Định dạng: <sha256|unpinned>  <url>
-# `unpinned` = chưa có bằng chứng digest thật; verify_download.py khi đó bắt buộc
-# đối chiếu với tệp checksums của chính bản phát hành và in cảnh báo.
-# Việc ghim giá trị thật (hoặc mirror nội bộ) do người thực hiện, hạn: trước Gate 3.
+#
+# `unpinned` = CHƯA có bằng chứng digest thật. verify_download.py coi đây là LỖI CỨNG
+# (fail-closed): job CI tương ứng sẽ đỏ cho tới khi điền digest thật. Không còn chế độ
+# "đối chiếu tệp checksums của chính bản phát hành + cảnh báo" vì lớp đó không chống
+# được kẻ kiểm soát release upstream hoặc MITM.
+#
+# Cách điền (chạy trên máy có mạng đáng tin cậy, một lần cho mỗi URL):
+#   curl -sSL -o f.tar.gz "<url>" && sha256sum f.tar.gz
+# rồi thay `unpinned` bằng giá trị 64 ký tự hex. Hoặc chuyển sang mirror nội bộ đã ký.
+#
+# Agent platform không có quyền ra mạng trong worktree nên KHÔNG đoán giá trị.
 
 unpinned  https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
 unpinned  https://github.com/open-policy-agent/conftest/releases/download/v0.56.0/conftest_0.56.0_Linux_x86_64.tar.gz

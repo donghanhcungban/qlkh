@@ -2,7 +2,8 @@
 
 Phủ tiêu chí chấp nhận 2 (SCA/license chặn) và 3 (SBOM CycloneDX), gồm cả đường lỗi.
 Bổ sung: cưỡng chế SD-01 (authz-gate không được warn khi đã có endpoint PII) và
-SD-09 (nhị phân tải trong CI phải xác minh checksum).
+SD-09 (nhị phân tải trong CI phải xác minh checksum — chi tiết trong
+`tests/fitness/test_verify_download.py`).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from tools.check_licenses import check as check_licenses
 from tools.check_sbom import main as sbom_main
 from tools.check_sbom import validate as validate_sbom
 from tools.ci_guard import authz_gate_violations, load_workflow, unverified_downloads
-from tools.verify_download import UNPINNED, load_pins, verify
+from tools.verify_download import load_pins
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
@@ -184,31 +185,3 @@ def test_pins_file_doc_duoc_va_phu_moi_url_trong_workflow():
 def test_pins_sai_dinh_dang_bao_loi():
     with pytest.raises(ValueError):
         load_pins("abc")
-
-
-def test_verify_url_khong_khai_bao_bi_chan():
-    problems = verify("aa", "https://x/y.tar.gz", {}, None)
-    assert problems == ["https://x/y.tar.gz: chưa khai báo trong ci/tool-checksums.txt (fail-closed)"]
-
-
-def test_verify_pin_khop():
-    assert verify("aa", "u", {"u": "aa"}, None) == []
-
-
-def test_verify_pin_lech_bi_chan():
-    problems = verify("bb", "u", {"u": "aa"}, None)
-    assert problems and "khác giá trị ghim" in problems[0]
-
-
-def test_verify_unpinned_can_checksums_url():
-    problems = verify("aa", "u", {"u": UNPINNED}, None)
-    assert problems and "--checksums-url" in problems[0]
-
-
-def test_verify_unpinned_khop_checksums_release():
-    assert verify("aa", "u", {"u": UNPINNED}, "AA  file.tar.gz\n") == []
-
-
-def test_verify_unpinned_khong_khop_checksums_release():
-    problems = verify("aa", "u", {"u": UNPINNED}, "cc  file.tar.gz\n")
-    assert problems and "không có trong tệp checksums" in problems[0]
