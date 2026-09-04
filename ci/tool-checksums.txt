@@ -1,0 +1,24 @@
+# Pin SHA-256 cho nhị phân tải trong CI (SD-09, T-12).
+# Định dạng: <sha256|unpinned>  <url>
+#
+# `unpinned` = CHƯA có bằng chứng digest thật. verify_download.py coi đây là LỖI CỨNG
+# (fail-closed): job CI tương ứng sẽ đỏ cho tới khi điền digest thật. Không còn chế độ
+# "đối chiếu tệp checksums của chính bản phát hành + cảnh báo" vì lớp đó không chống
+# được kẻ kiểm soát release upstream hoặc MITM.
+#
+# Cách điền (chạy trên máy có mạng đáng tin cậy, một lần cho mỗi URL):
+#   curl -sSL -o f.tar.gz "<url>" && sha256sum f.tar.gz
+# rồi thay `unpinned` bằng giá trị 64 ký tự hex. Hoặc chuyển sang mirror nội bộ đã ký.
+#
+# Agent platform không có quyền ra mạng trong worktree nên KHÔNG đoán giá trị.
+#
+# Điền ngày 2026-09-04 từ máy có mạng. Mỗi digest lấy theo HAI đường độc lập rồi đối chiếu:
+#   (1) tải tệp về, `sha256sum` trên nội dung thật
+#   (2) tệp checksums do chính dự án phát hành (gitleaks_*_checksums.txt, checksums.txt, syft_*_checksums.txt)
+# Cả ba khớp tuyệt đối giữa hai đường. Lưu ý giới hạn mà chính tệp này đã nêu: đường (2) không
+# chống được kẻ kiểm soát release upstream — nó chỉ loại bỏ khả năng MITM trên đường (1).
+# Từ đây trở đi giá trị là CỐ ĐỊNH: nhị phân đổi nội dung thì CI đỏ, kể cả khi upstream đổi.
+
+5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba  https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+620f41640d63bbde1646a108ce2816ba54c980466ceebb7e754dda2d508e8cd5  https://github.com/open-policy-agent/conftest/releases/download/v0.56.0/conftest_0.56.0_Linux_x86_64.tar.gz
+066c251652221e4d44fcc4d115ce3df33a91769da38c830a8533199db2f65aab  https://github.com/anchore/syft/releases/download/v1.18.1/syft_1.18.1_linux_amd64.tar.gz

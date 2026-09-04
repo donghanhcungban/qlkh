@@ -1,0 +1,2 @@
+# Lockfile runtime của QLKH — CI cài ở chế độ frozen, lệch lockfile là fail.
+# QLKH-001 chưa có phụ thuộc runtime; công cụ dev được ghim trong .github/workflows/ci.yml.
