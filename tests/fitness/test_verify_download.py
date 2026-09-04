@@ -42,10 +42,6 @@ def test_pins_sai_dinh_dang_bao_loi():
         load_pins("abc")
 
 
-@pytest.mark.xfail(
-    reason="SD-09 chưa đóng: cần chạy sha256sum trên mạng đáng tin cậy để điền digest thật",
-    strict=False,
-)
 def test_repo_khong_con_pin_unpinned():
     pins = load_pins(PINS_PATH.read_text(encoding="utf-8"))
     assert pins and all(digest != UNPINNED for digest in pins.values())
