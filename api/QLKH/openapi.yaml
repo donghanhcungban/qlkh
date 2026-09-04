@@ -1,0 +1,413 @@
+openapi: 3.1.0
+info:
+  title: QLKH LMS API
+  version: 1.0.0
+  description: |
+    Contract-first. Nguồn sự thật duy nhất của API QLKH.
+    Uỷ quyền áp ở tầng dữ liệu (ADR-004): branch_id LUÔN lấy từ phiên, không bao giờ từ tham số client.
+    Rate limit mặc định: 120 req/phút/tài khoản, 600 req/phút/IP. Vượt → 429 kèm Retry-After.
+    Giới hạn body: 1 MiB; upload học liệu: 25 MiB.
+servers:
+  - url: https://api.qlkh.example.vn/v1
+security:
+  - sessionCookie: []
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: qlkh_session
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string, description: "URI ổn định, vd https://qlkh/errors/forbidden" }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string, description: "Không chứa thông tin nội bộ" }
+        instance: { type: string }
+    PageMeta:
+      type: object
+      properties:
+        next_cursor: { type: [string, 'null'] }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        mfa_code: { type: [string, 'null'], description: "Bắt buộc với tài khoản quản trị" }
+    Me:
+      type: object
+      required: [user_id, role, branch_ids]
+      properties:
+        user_id: { type: string, format: uuid }
+        role: { type: string, enum: [parent, teacher, staff, admin] }
+        branch_ids: { type: array, items: { type: string, format: uuid } }
+    Student:
+      type: object
+      required: [id, full_name, branch_id]
+      properties:
+        id: { type: string, format: uuid }
+        full_name: { type: string }
+        date_of_birth: { type: string, format: date }
+        branch_id: { type: string, format: uuid, readOnly: true }
+        parent_phone_masked: { type: string, readOnly: true, examples: ["+84***123"] }
+    StudentCreate:
+      type: object
+      required: [full_name, date_of_birth]
+      properties:
+        full_name: { type: string }
+        date_of_birth: { type: string, format: date }
+        parent_phone: { type: string }
+    StudentPatch:
+      type: object
+      description: "Allowlist. role/branch_id/is_teacher bị bỏ qua và ghi audit."
+      additionalProperties: false
+      properties:
+        full_name: { type: string }
+        parent_phone: { type: string }
+    Class:
+      type: object
+      required: [id, name, branch_id]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        branch_id: { type: string, format: uuid, readOnly: true }
+        teacher_id: { type: string, format: uuid }
+    AttendanceBulk:
+      type: object
+      required: [entries]
+      description: "attendance_at do server sinh; giá trị client gửi bị bỏ qua."
+      properties:
+        entries:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            required: [student_id, status]
+            properties:
+              student_id: { type: string, format: uuid }
+              status: { type: string, enum: [present, absent, late, excused] }
+    Grade:
+      type: object
+      required: [id, student_id, class_id, score, published]
+      properties:
+        id: { type: string, format: uuid }
+        student_id: { type: string, format: uuid }
+        class_id: { type: string, format: uuid }
+        score: { type: number, minimum: 0, maximum: 10 }
+        published: { type: boolean }
+    GradeUpsert:
+      type: object
+      required: [student_id, score]
+      properties:
+        student_id: { type: string, format: uuid }
+        score: { type: number, minimum: 0, maximum: 10 }
+        publish: { type: boolean, default: false }
+        reason: { type: string, description: "Bắt buộc khi sửa điểm đã công bố" }
+    GradeHistoryEntry:
+      type: object
+      required: [id, grade_id, actor_id, changed_at, reason]
+      properties:
+        id: { type: string, format: uuid }
+        grade_id: { type: string, format: uuid }
+        old_score: { type: [number, 'null'] }
+        new_score: { type: number }
+        actor_id: { type: string, format: uuid }
+        changed_at: { type: string, format: date-time }
+        reason: { type: string }
+    Material:
+      type: object
+      required: [id, class_id, filename, mime_type, size_bytes]
+      properties:
+        id: { type: string, format: uuid }
+        class_id: { type: string, format: uuid }
+        filename: { type: string }
+        mime_type: { type: string, enum: [application/pdf, image/png, image/jpeg, application/vnd.openxmlformats-officedocument.presentationml.presentation] }
+        size_bytes: { type: integer, maximum: 26214400 }
+    Consent:
+      type: object
+      required: [id, student_id, purpose, document_version, granted_at, status]
+      properties:
+        id: { type: string, format: uuid }
+        student_id: { type: string, format: uuid }
+        purpose: { type: string, enum: [service_delivery, notification, photo_publication] }
+        document_version: { type: string }
+        granted_at: { type: string, format: date-time }
+        status: { type: string, enum: [granted, withdrawn] }
+    ErasureRequest:
+      type: object
+      required: [id, subject_student_id, requested_at, due_at, status]
+      properties:
+        id: { type: string, format: uuid }
+        subject_student_id: { type: string, format: uuid }
+        requested_at: { type: string, format: date-time }
+        due_at: { type: string, format: date-time, description: "requested_at + 30 ngày" }
+        status: { type: string, enum: [pending, completed] }
+  responses:
+    Unauthorized:
+      description: Chưa xác thực
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' }, examples: { e: { value: { type: "https://qlkh/errors/unauthorized", title: "Unauthorized", status: 401 } } } } }
+    Forbidden:
+      description: Không đủ quyền
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' }, examples: { e: { value: { type: "https://qlkh/errors/forbidden", title: "Forbidden", status: 403 } } } } }
+    NotFound:
+      description: Không tồn tại hoặc ngoài phạm vi (không lộ tồn tại)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' }, examples: { e: { value: { type: "https://qlkh/errors/not-found", title: "Not Found", status: 404 } } } } }
+    Conflict:
+      description: Xung đột trạng thái
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unprocessable:
+      description: Dữ liệu không hợp lệ
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    UnsupportedMedia:
+      description: Kiểu tệp không được chấp nhận (magic bytes không khớp)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    TooManyRequests:
+      description: Vượt rate limit
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+paths:
+  /auth/login:
+    post:
+      operationId: login
+      security: []
+      summary: Đăng nhập; thông điệp lỗi đồng nhất cho sai mật khẩu và không tồn tại
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/LoginRequest' } } }
+      responses:
+        '204': { description: Thành công, đặt cookie qlkh_session HttpOnly SameSite=Lax Secure }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/logout:
+    post:
+      operationId: logout
+      responses:
+        '204': { description: Đã hủy phiên }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/me:
+    get:
+      operationId: getMe
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /students:
+    get:
+      operationId: listStudents
+      summary: Danh sách học viên trong phạm vi cơ sở của phiên
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Student' } }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+    post:
+      operationId: createStudent
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/StudentCreate' } } }
+      responses:
+        '201': { description: Đã tạo, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /students/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: getStudent
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: patchStudent
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/StudentPatch' } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /students/{id}/grades:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: listStudentGrades
+      summary: Phụ huynh chỉ xem được con mình; điểm chưa công bố không trả về
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Grade' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /students/{id}/consents:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: listStudentConsents
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Consent' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /classes:
+    get:
+      operationId: listClasses
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Class' } }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createClass
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Class' } } }
+      responses:
+        '201': { description: Đã tạo, content: { application/json: { schema: { $ref: '#/components/schemas/Class' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /classes/{id}/enrollments:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      operationId: enrollStudent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [student_id]
+              properties: { student_id: { type: string, format: uuid } }
+      responses:
+        '201': { description: Đã ghi danh }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /classes/{id}/attendance:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: listAttendance
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: bulkAttendance
+      summary: Điểm danh hàng loạt; giáo viên chỉ thao tác lớp phụ trách
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AttendanceBulk' } } }
+      responses:
+        '201': { description: Đã ghi }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /classes/{id}/grades:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      operationId: upsertGrade
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/GradeUpsert' } } }
+      responses:
+        '201': { description: Đã ghi, content: { application/json: { schema: { $ref: '#/components/schemas/Grade' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable', description: "Thiếu reason khi sửa điểm đã công bố" }
+  /grades/{id}/history:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: listGradeHistory
+      summary: Lịch sử append-only
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/GradeHistoryEntry' } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /classes/{id}/materials:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      operationId: uploadMaterial
+      summary: Upload học liệu; kiểm magic bytes, không tin đuôi tệp và Content-Type
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties: { file: { type: string, format: binary } }
+      responses:
+        '201': { description: Đã tải lên, content: { application/json: { schema: { $ref: '#/components/schemas/Material' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '415': { $ref: '#/components/responses/UnsupportedMedia' }
+  /materials/{id}/download:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: downloadMaterial
+      summary: Kiểm quyền rồi chuyển hướng tới URL ký hiệu lực <= 15 phút
+      responses:
+        '302': { description: Redirect tới URL ký; Content-Disposition attachment }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /consents:
+    post:
+      operationId: createConsent
+      summary: Ghi nhận đồng ý của cha mẹ; mỗi mục đích một bản ghi riêng
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [student_id, purpose, document_version]
+              properties:
+                student_id: { type: string, format: uuid }
+                purpose: { type: string, enum: [service_delivery, notification, photo_publication] }
+                document_version: { type: string }
+      responses:
+        '201': { description: Đã ghi, content: { application/json: { schema: { $ref: '#/components/schemas/Consent' } } } }
+        '422': { $ref: '#/components/responses/Unprocessable', description: "Gộp nhiều mục đích trong một bản ghi" }
+  /consents/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    delete:
+      operationId: revokeConsent
+      summary: Rút lại đồng ý
+      responses:
+        '204': { description: Đã rút }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /erasure-requests:
+    post:
+      operationId: createErasureRequest
+      summary: Yêu cầu xóa dữ liệu; hoàn tất trong <= 30 ngày
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject_student_id]
+              properties: { subject_student_id: { type: string, format: uuid } }
+      responses:
+        '202': { description: Đã tiếp nhận, content: { application/json: { schema: { $ref: '#/components/schemas/ErasureRequest' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }

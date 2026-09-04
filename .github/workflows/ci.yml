@@ -51,11 +51,9 @@ jobs:
       - run: lint-imports --config importlinter.ini
 
   authz-gate:
-    # SD-01: hiện ở chế độ cảnh báo vì chưa có endpoint PII nào được hiện thực.
-    # Cưỡng chế bằng tests/fitness/test_ci_gates.py: ngay khi OpenAPI có operation
-    # chạm PII, test đỏ nếu `continue-on-error` còn ở đây (RISK-3, T-01/T-02).
+    # SD-01: QLKH-003 thêm test uỷ quyền → bỏ continue-on-error (RISK-3, T-01/T-02).
+    # authz-gate giờ là cổng chặn cứng: thiếu test uỷ quyền cho endpoint PII → fail build.
     runs-on: ubuntu-24.04
-    continue-on-error: true
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
@@ -63,6 +61,17 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install pyyaml==6.0.2
       - run: python tools/check_authz_tests.py api/QLKH/openapi.yaml tests/authz
+
+  p3-gate:
+    # ADR-004, REQ-009, T-01/T-02: mọi truy cập bảng PII phải đi qua SubjectContext.
+    # Kiểm bằng AST tĩnh (tools/p3_gate.py) — không cần chạy code.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: python -m tools.p3_gate qlkh
 
   sast:
     runs-on: ubuntu-24.04
