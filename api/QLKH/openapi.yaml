@@ -1,12 +1,21 @@
 openapi: 3.1.0
 info:
   title: QLKH LMS API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Contract-first. Nguồn sự thật duy nhất của API QLKH.
     Uỷ quyền áp ở tầng dữ liệu (ADR-004): branch_id LUÔN lấy từ phiên, không bao giờ từ tham số client.
     Rate limit mặc định: 120 req/phút/tài khoản, 600 req/phút/IP. Vượt → 429 kèm Retry-After.
     Giới hạn body: 1 MiB; upload học liệu: 25 MiB.
+
+    Xác thực (QLKH-004, REQ-001, NFR-002, ADR-002): phiên máy chủ, cookie qlkh_session
+    HttpOnly + Secure + SameSite=Lax, vòng đời 12 giờ, thu hồi được tức thì.
+    Lỗi đăng nhập đồng nhất cho mọi nguyên nhân; khóa tạm 5 lần sai/15 phút theo tài khoản
+    và throttle backoff theo IP; MFA bắt buộc cho vai trò admin.
+
+    1.1.0 (minor, chỉ bổ sung mô tả/ví dụ — không đổi schema, không đổi mã trạng thái):
+    mô tả tường minh hành vi của /auth/login, /auth/logout, /auth/me kèm ví dụ Problem Details
+    cho 401 và 429 để client bắt lỗi theo `type` thay vì theo chuỗi `detail`.
 servers:
   - url: https://api.qlkh.example.vn/v1
 security:
@@ -185,22 +194,90 @@ paths:
       operationId: login
       security: []
       summary: Đăng nhập; thông điệp lỗi đồng nhất cho sai mật khẩu và không tồn tại
+      description: |
+        Lỗi KHÔNG phân biệt nguyên nhân (email không tồn tại, sai mật khẩu, tài khoản bị
+        vô hiệu hóa, thiếu/sai mã MFA): cùng status, cùng `type`, cùng `detail` — chống
+        liệt kê tài khoản (T-04). Máy chủ chạy đúng một lần KDF ở mọi nhánh nên thời gian
+        phản hồi cũng không phân biệt.
+
+        Khóa tạm theo TÀI KHOẢN: 5 lần sai trong 15 phút → khóa 15 phút; trong thời gian
+        khóa mọi lần gọi trả 429 kèm `Retry-After` và phản hồi giống hệt nhau giữa email
+        tồn tại và không tồn tại.
+        Theo IP: throttle backoff (ngưỡng 50 lần sai/15 phút, `Retry-After` tăng dần từ 2s,
+        trần 60s) thay cho khóa cứng, để một IP NAT dùng chung không làm DoS người hợp lệ.
+
+        Tài khoản vai trò `admin` bắt buộc `mfa_code`; thiếu hoặc sai → 401 đồng nhất.
+
+        Thành công: cookie phiên máy chủ `qlkh_session` (HttpOnly, Secure, SameSite=Lax,
+        Path=/), vòng đời 12 giờ, thu hồi được tức thì khi tài khoản bị vô hiệu hóa.
       requestBody:
         required: true
-        content: { application/json: { schema: { $ref: '#/components/schemas/LoginRequest' } } }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            examples:
+              teacher:
+                value: { email: "giaovien@qlkh.example.vn", password: "mat-khau-du-dai" }
+              admin:
+                value: { email: "quantri@qlkh.example.vn", password: "mat-khau-du-dai", mfa_code: "123456" }
       responses:
-        '204': { description: Thành công, đặt cookie qlkh_session HttpOnly SameSite=Lax Secure }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '204':
+          description: Thành công; đặt cookie phiên máy chủ
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: "qlkh_session=<định danh ngẫu nhiên>; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=43200"
+        '401':
+          description: Không đăng nhập được — thông điệp đồng nhất cho mọi nguyên nhân
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                uniform:
+                  value:
+                    type: "https://qlkh/errors/unauthorized"
+                    title: "Unauthorized"
+                    status: 401
+                    detail: "Email hoặc mật khẩu không đúng."
+        '429':
+          description: Vượt ngưỡng lần sai theo tài khoản (khóa 15 phút) hoặc theo IP (throttle)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: "Số giây phải chờ; 900 khi bị khóa theo tài khoản"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                locked:
+                  value:
+                    type: "https://qlkh/errors/too-many-requests"
+                    title: "Too Many Requests"
+                    status: 429
+                    detail: "Quá nhiều lần đăng nhập sai. Thử lại sau ít phút."
   /auth/logout:
     post:
       operationId: logout
+      summary: Hủy phiên hiện tại
+      description: |
+        Idempotent: gọi lại với phiên đã hủy vẫn trả 204. Định danh phiên chỉ lấy từ cookie,
+        không nhận từ body/query. Phản hồi xóa cookie `qlkh_session`.
       responses:
-        '204': { description: Đã hủy phiên }
+        '204':
+          description: Đã hủy phiên; cookie qlkh_session bị xóa
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: "qlkh_session=; Max-Age=0; HttpOnly; Secure; SameSite=Lax; Path=/"
         '401': { $ref: '#/components/responses/Unauthorized' }
   /auth/me:
     get:
       operationId: getMe
+      summary: Thông tin chủ phiên hiện tại
+      description: |
+        Mỗi request kiểm lại trạng thái hoạt động của chủ phiên: tài khoản bị vô hiệu hóa
+        → 401 ngay lập tức dù cookie còn hạn, đồng thời toàn bộ phiên của tài khoản đó bị
+        thu hồi (T-03). `branch_ids` lấy từ phiên; client không bao giờ gửi branch_id.
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }

@@ -1,0 +1,23 @@
+{
+  "$comment": "Ngoại lệ cho tools/check_licenses.py (SD-04). Chỉ dành cho thành phần syft đưa vào SBOM mà KHÔNG phải phụ thuộc runtime giao khách. GitHub Actions là bước CI, ghim theo commit SHA trong .github/workflows/ci.yml (T-12); syft cataloger github-actions liệt kê chúng không kèm trường license nên cổng license đỏ dù chúng đều MIT (upstream). Phụ thuộc runtime KHÔNG được vào đây — phải có SPDX trong THIRD-PARTY.md.",
+  "exceptions": [
+    {
+      "component": "actions/checkout",
+      "reason": "GitHub Action (MIT upstream), không phải phụ thuộc runtime; syft không điền license cho action",
+      "adr": "ADR-002",
+      "expires": "2027-03-31"
+    },
+    {
+      "component": "actions/setup-python",
+      "reason": "GitHub Action (MIT upstream), không phải phụ thuộc runtime; syft không điền license cho action",
+      "adr": "ADR-002",
+      "expires": "2027-03-31"
+    },
+    {
+      "component": "actions/upload-artifact",
+      "reason": "GitHub Action (MIT upstream), không phải phụ thuộc runtime; syft không điền license cho action",
+      "adr": "ADR-002",
+      "expires": "2027-03-31"
+    }
+  ]
+}
