@@ -168,3 +168,59 @@ class AttendanceRepository(Protocol):
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Danh sách điểm danh của một lớp; cursor-based pagination."""
         ...
+
+
+class GradeRepository(Protocol):
+    """Giao diện truy cập bảng `grades` — bắt buộc đi qua SubjectContext
+    (QLKH-008, REQ-006).
+
+    Kiểm quyền theo CẢ HAI trục (P3): trục cơ sở (branch_id từ ctx) VÀ trục
+    quan hệ (phụ huynh chỉ con mình, giáo viên chỉ lớp phụ trách). `class_id`
+    đã được service kiểm 404/403 qua `ClassRepository` trước khi gọi
+    `upsert`/`get_existing` tới đây; `get_student_ref` tự làm việc kiểm quyền
+    tương đương `StudentRepository.get_by_id` cho trục học viên.
+    """
+
+    def get_student_ref(
+        self,
+        ctx: SubjectContext,
+        student_id: str,
+    ) -> dict[str, Any] | None:
+        """Xác nhận học viên tồn tại VÀ ctx có quyền truy cập (P3).
+
+        Trả None nếu không tồn tại HOẶC ngoài phạm vi ctx (phụ huynh xem
+        học viên không phải con mình) — không lộ sự tồn tại (404 ở HTTP).
+        """
+        ...
+
+    def get_existing(
+        self,
+        ctx: SubjectContext,
+        class_id: str,
+        student_id: str,
+    ) -> dict[str, Any] | None:
+        """Lấy bản ghi điểm hiện có (nếu có) để service kiểm `published` trước
+        khi cho phép sửa mà không có `reason`."""
+        ...
+
+    def upsert(
+        self,
+        ctx: SubjectContext,
+        class_id: str,
+        *,
+        student_id: str,
+        score: float,
+        publish: bool,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        """Ghi/cập nhật điểm; branch_id/class_id đã kiểm quyền ở service."""
+        ...
+
+    def list_for_student(
+        self,
+        ctx: SubjectContext,
+        student_id: str,
+    ) -> list[dict[str, Any]]:
+        """Toàn bộ điểm của một học viên (đã kiểm quyền học viên ở service);
+        bao gồm cả bản ghi chưa công bố — lọc theo vai trò do service quyết."""
+        ...
