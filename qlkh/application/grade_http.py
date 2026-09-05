@@ -1,5 +1,6 @@
-"""Lớp chuyển đổi HTTP <-> GradeService (QLKH-008, REQ-006) — Problem Details
-theo RFC 9457, cùng mẫu với `class_http.py`/`attendance_http.py`.
+"""Lớp chuyển đổi HTTP <-> GradeService (QLKH-008, REQ-006; lịch sử+thông báo
+QLKH-009, REQ-008) — Problem Details theo RFC 9457, cùng mẫu với
+`class_http.py`/`attendance_http.py`.
 
 Không có framework HTTP thật trong repo (xem docstring `student_http.py`);
 handler ở đây thuần Python, nhận request đã chuẩn hoá (query/body dict) và
@@ -58,7 +59,8 @@ class JsonAuditSink:
 
 
 class GradeHttpHandlers:
-    """Handler thuần Python cho POST /classes/{id}/grades, GET /students/{id}/grades."""
+    """Handler thuần Python cho POST /classes/{id}/grades,
+    GET /students/{id}/grades, GET /grades/{id}/history."""
 
     def __init__(self, service: GradeService) -> None:
         self._service = service
@@ -92,4 +94,11 @@ class GradeHttpHandlers:
             records = self._service.list_student_grades(ctx, student_id)
         except StudentNotFound:
             return _problem(404, "not-found", "Not Found")
+        return HttpResult(status=200, body={"data": [_to_response_body(r) for r in records]})
+
+    def list_grade_history(self, ctx: SubjectContext, grade_id: str) -> HttpResult:
+        try:
+            records = self._service.list_grade_history(ctx, grade_id)
+        except ClassPermissionDenied:
+            return _problem(403, "forbidden", "Forbidden")
         return HttpResult(status=200, body={"data": [_to_response_body(r) for r in records]})
