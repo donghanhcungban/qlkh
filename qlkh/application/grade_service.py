@@ -1,11 +1,13 @@
-"""Dịch vụ điểm số (QLKH-008, REQ-006).
+"""Dịch vụ điểm số (QLKH-008, REQ-006; lịch sử+thông báo QLKH-009, REQ-008).
 
-Cài đặt POST /classes/{id}/grades và GET /students/{id}/grades theo
-api-contract v1.3.0 (schema `Grade`, `GradeUpsert`). Không import ORM/HTTP:
-mọi phụ thuộc là Protocol, adapter hạ tầng hiện thực sau.
+Cài đặt POST /classes/{id}/grades, GET /students/{id}/grades và
+GET /grades/{id}/history theo api-contract v1.3.0 (schema `Grade`,
+`GradeUpsert`, `GradeHistoryEntry`). Không import ORM/HTTP: mọi phụ thuộc là
+Protocol, adapter hạ tầng hiện thực sau.
 
 Threat refs: QLKH-T-01 (rò rỉ điểm chéo học viên), QLKH-T-07 (giáo viên thao
-tác lớp không phụ trách — BFLA/BOLA).
+tác lớp không phụ trách — BFLA/BOLA), QLKH-T-06 (sửa điểm đã công bố không để
+lại vết — mục tiêu chính của QLKH-009).
 
 Quy tắc cốt lõi (Gherkin của ticket):
 - Kiểm quyền theo CẢ HAI trục (P3): trục cơ sở (branch_id lấy từ ctx, không
@@ -24,13 +26,25 @@ Quy tắc cốt lõi (Gherkin của ticket):
   điểm chưa công bố (cần để quản lý/chỉnh sửa).
 - Sửa một điểm ĐÃ công bố bắt buộc phải có `reason` (audit ai/khi nào/vì sao
   đổi điểm đã công khai) -> thiếu `reason` là 422.
+- (QLKH-009) Mỗi lần sửa một điểm đã tồn tại (bất kể đã công bố hay chưa) ghi
+  thêm một bản ghi lịch sử append-only (giá trị cũ/mới, actor, thời điểm
+  server, lý do). Bảng lịch sử không có đường update/delete ở Protocol này,
+  và bị chặn ở tầng DB (trigger, xem db/migrations/0004_grade_history.up.sql).
+- (QLKH-009) Sửa một điểm ĐÃ công bố -> kích hoạt thông báo cho phụ huynh của
+  học viên đó. Lỗi ở kênh thông báo không được làm hỏng việc ghi điểm/lịch sử
+  (best-effort, xem docstring `NotificationSink`).
 """
 
 from __future__ import annotations
 
 from typing import Any, Protocol
 
-from qlkh.application.repository_ports import ClassRepository, GradeRepository
+from qlkh.application.repository_ports import (
+    ClassRepository,
+    GradeHistoryRepository,
+    GradeRepository,
+    NotificationSink,
+)
 from qlkh.domain.subject_context import SubjectContext
 
 MIN_SCORE = 0
@@ -48,7 +62,11 @@ class ClassNotFound(Exception):
 
 
 class ClassPermissionDenied(Exception):
-    """Lớp tồn tại trong cơ sở nhưng ctx không có quyền phụ trách — 403."""
+    """Lớp tồn tại trong cơ sở nhưng ctx không có quyền phụ trách — 403.
+
+    Cũng dùng lại cho "không có quyền xem lịch sử điểm" (403) — cùng bản chất
+    BFLA: role/quan hệ không đủ, không phải "không tồn tại".
+    """
 
 
 class StudentNotFound(Exception):
@@ -61,17 +79,22 @@ class InvalidGradeInput(ValueError):
 
 
 class GradeService:
-    """Ca dùng nhập điểm và xem điểm, kiểm quyền theo cả hai trục (P3)."""
+    """Ca dùng nhập điểm, xem điểm và xem lịch sử, kiểm quyền theo cả hai
+    trục (P3)."""
 
     def __init__(
         self,
         classes: ClassRepository,
         grades: GradeRepository,
         audit: AuditSink,
+        history: GradeHistoryRepository,
+        notifier: NotificationSink,
     ) -> None:
         self._classes = classes
         self._grades = grades
         self._audit = audit
+        self._history = history
+        self._notifier = notifier
 
     # ------------------------------------------------------------------ #
     # Kiểm quyền dùng lại cho POST /classes/{id}/grades
@@ -117,7 +140,9 @@ class GradeService:
         self._get_class_or_raise(ctx, class_id)
 
         existing = self._grades.get_existing(ctx, class_id, student_id)
-        if existing is not None and existing.get("published") and not (reason and reason.strip()):
+        was_published = bool(existing is not None and existing.get("published"))
+        has_reason = bool(reason and reason.strip())
+        if was_published and not has_reason:
             raise InvalidGradeInput("reason bắt buộc khi sửa điểm đã công bố")
 
         record = self._grades.upsert(
@@ -128,6 +153,34 @@ class GradeService:
             publish=publish,
             reason=reason,
         )
+
+        # (QLKH-009) Đây là một lần SỬA (đã có bản ghi trước) -> ghi lịch sử
+        # append-only. Lần TẠO MỚI (existing is None) không có "giá trị cũ"
+        # để so sánh nên không tạo lịch sử.
+        if existing is not None:
+            self._history.record(
+                ctx,
+                grade_id=record["id"],
+                old_score=existing.get("score"),
+                new_score=score,
+                actor_id=ctx.user_id,
+                reason=reason or "",
+            )
+            if was_published:
+                # Điểm đã công bố bị sửa -> phụ huynh phải được báo. Kênh
+                # thông báo là phụ thuộc ngoài (best-effort, có timeout/retry
+                # riêng ở adapter) — không ném lỗi ra đây làm hỏng việc ghi
+                # điểm/lịch sử đã thành công.
+                self._notifier.notify_grade_revised(
+                    ctx,
+                    student_id=student_id,
+                    class_id=class_id,
+                    grade_id=record["id"],
+                    old_score=existing.get("score"),
+                    new_score=score,
+                    reason=reason or "",
+                )
+
         self._audit.record(
             "grade.upserted",
             actor_id=ctx.user_id,
@@ -135,6 +188,7 @@ class GradeService:
             class_id=class_id,
             student_id=student_id,
             published=record.get("published"),
+            is_revision=existing is not None,
         )
         return record
 
@@ -158,4 +212,28 @@ class GradeService:
             # Điểm chưa công bố không được xuất hiện trong response của phụ
             # huynh — lọc hẳn ra, không trả kèm cờ "published=False".
             records = [r for r in records if r.get("published")]
+        return records
+
+    # ------------------------------------------------------------------ #
+    # GET /grades/{id}/history (QLKH-009, REQ-008)
+    # ------------------------------------------------------------------ #
+    def list_grade_history(self, ctx: SubjectContext, grade_id: str) -> list[dict[str, Any]]:
+        """Lịch sử append-only của một điểm.
+
+        Chỉ giáo viên/nhân viên/quản trị xem được lịch sử sửa điểm (đây là dữ
+        liệu vận hành/audit nội bộ, không phải màn hình của phụ huynh — contract
+        `/grades/{id}/history` chỉ khai báo 200/403, không có đường phụ huynh
+        hợp lệ). `GradeHistoryRepository.list_for_grade` áp thêm bộ lọc P3
+        theo cơ sở/lớp phụ trách của ctx; trả None nếu ngoài phạm vi -> 403
+        (không lộ tồn tại của điểm/lớp nằm ngoài phạm vi qua kênh này).
+        """
+        if ctx.role not in ("teacher", "staff", "admin"):
+            raise ClassPermissionDenied(f"role {ctx.role} không được xem lịch sử điểm")
+
+        records = self._history.list_for_grade(ctx, grade_id)
+        if records is None:
+            raise ClassPermissionDenied(
+                f"user {ctx.user_id} (role={ctx.role}) không có quyền xem lịch sử "
+                f"của điểm {grade_id}"
+            )
         return records

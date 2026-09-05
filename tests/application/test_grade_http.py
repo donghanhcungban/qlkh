@@ -1,4 +1,5 @@
-"""Test GradeHttpHandlers (QLKH-008, REQ-006) — mapping lỗi domain -> Problem Details."""
+"""Test GradeHttpHandlers (QLKH-008, REQ-006; QLKH-009, REQ-008) — mapping
+lỗi domain -> Problem Details."""
 
 from __future__ import annotations
 
@@ -78,8 +79,38 @@ class NullAudit:
         pass
 
 
+class FakeGradeHistoryRepo:
+    def __init__(self) -> None:
+        self._entries: list[dict[str, Any]] = []
+        self._seq = 0
+
+    def record(self, ctx, *, grade_id, old_score, new_score, actor_id, reason):
+        self._seq += 1
+        entry = {
+            "id": f"hist-{self._seq}",
+            "grade_id": grade_id,
+            "old_score": old_score,
+            "new_score": new_score,
+            "actor_id": actor_id,
+            "changed_at": f"t{self._seq}",
+            "reason": reason,
+        }
+        self._entries.append(entry)
+        return entry
+
+    def list_for_grade(self, ctx, grade_id):
+        return [e for e in self._entries if e["grade_id"] == grade_id]
+
+
+class NullNotifier:
+    def notify_grade_revised(self, ctx, **fields):
+        pass
+
+
 def make_handlers() -> GradeHttpHandlers:
-    service = GradeService(FakeClassRepo(), FakeGradeRepo(), NullAudit())
+    service = GradeService(
+        FakeClassRepo(), FakeGradeRepo(), NullAudit(), FakeGradeHistoryRepo(), NullNotifier()
+    )
     return GradeHttpHandlers(service)
 
 
@@ -143,3 +174,48 @@ def test_get_student_grades_hides_unpublished_for_parent():
 
     assert result.status == 200
     assert result.body["data"] == []
+
+
+# ---------------------------------------------------------------------- #
+# QLKH-009: POST sửa điểm đã công bố thiếu reason -> 422
+# ---------------------------------------------------------------------- #
+def test_post_grade_editing_published_without_reason_is_422():
+    handlers = make_handlers()
+    teacher = teacher_ctx()
+    handlers.upsert_grade(teacher, CLASS_1, {"student_id": STUDENT_SON, "score": 9, "publish": True})
+
+    result = handlers.upsert_grade(teacher, CLASS_1, {"student_id": STUDENT_SON, "score": 7})
+
+    assert result.status == 422
+    assert result.body["type"] == "https://qlkh/errors/unprocessable"
+
+
+# ---------------------------------------------------------------------- #
+# QLKH-009: GET /grades/{id}/history
+# ---------------------------------------------------------------------- #
+def test_get_grade_history_forbidden_for_parent():
+    handlers = make_handlers()
+    parent = parent_ctx()
+
+    result = handlers.list_grade_history(parent, "grade-1")
+
+    assert result.status == 403
+    assert result.body["type"] == "https://qlkh/errors/forbidden"
+
+
+def test_get_grade_history_returns_entries_for_teacher():
+    handlers = make_handlers()
+    teacher = teacher_ctx()
+    handlers.upsert_grade(teacher, CLASS_1, {"student_id": STUDENT_SON, "score": 9, "publish": True})
+    handlers.upsert_grade(
+        teacher, CLASS_1, {"student_id": STUDENT_SON, "score": 7, "reason": "Sửa nhầm"}
+    )
+
+    result = handlers.list_grade_history(teacher, "grade-1")
+
+    assert result.status == 200
+    assert len(result.body["data"]) == 1
+    entry = result.body["data"][0]
+    assert entry["old_score"] == 9
+    assert entry["new_score"] == 7
+    assert entry["actor_id"] == "teacher-1"

@@ -224,3 +224,59 @@ class GradeRepository(Protocol):
         """Toàn bộ điểm của một học viên (đã kiểm quyền học viên ở service);
         bao gồm cả bản ghi chưa công bố — lọc theo vai trò do service quyết."""
         ...
+
+
+class GradeHistoryRepository(Protocol):
+    """Giao diện truy cập bảng `grade_history` — append-only (QLKH-009, REQ-008).
+
+    Bảng lịch sử KHÔNG có phương thức update/delete trong Protocol này — chỉ
+    `record` (ghi thêm) và `list_for_grade` (đọc). Việc chặn UPDATE/DELETE còn
+    được ép ở tầng DB bằng trigger (db/migrations/0004_grade_history.up.sql),
+    không chỉ dựa vào việc Protocol "không có phương thức đó".
+    """
+
+    def record(
+        self,
+        ctx: SubjectContext,
+        *,
+        grade_id: str,
+        old_score: float | None,
+        new_score: float,
+        actor_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Ghi thêm một bản ghi lịch sử; `changed_at` do server sinh."""
+        ...
+
+    def list_for_grade(
+        self,
+        ctx: SubjectContext,
+        grade_id: str,
+    ) -> list[dict[str, Any]] | None:
+        """Lịch sử của một điểm, mới nhất trước. Trả None nếu `ctx` không có
+        quyền xem lịch sử của điểm này (ngoài phạm vi cơ sở/lớp phụ trách)."""
+        ...
+
+
+class NotificationSink(Protocol):
+    """Đích gửi thông báo cho phụ huynh (QLKH-009, REQ-008).
+
+    Adapter hạ tầng (kênh SMS/Zalo/email — DEF-03, chỉ nhà cung cấp có hạ
+    tầng tại VN theo ADR-006) hiện thực sau; service chỉ biết Protocol này.
+    Gọi ra ngoài phải có timeout/retry riêng ở adapter — không chặn luồng
+    ghi điểm chính (xem bảng "Xử lý khi phụ thuộc hỏng" trong architecture).
+    """
+
+    def notify_grade_revised(
+        self,
+        ctx: SubjectContext,
+        *,
+        student_id: str,
+        class_id: str,
+        grade_id: str,
+        old_score: float | None,
+        new_score: float,
+        reason: str,
+    ) -> None:
+        """Báo phụ huynh khi một điểm ĐÃ CÔNG BỐ của con mình bị sửa."""
+        ...
