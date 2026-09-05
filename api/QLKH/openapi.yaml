@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: QLKH LMS API
-  version: 1.3.0
+  version: 1.4.0
   description: |
     Contract-first. Nguồn sự thật duy nhất của API QLKH.
     Uỷ quyền áp ở tầng dữ liệu (ADR-004): branch_id LUÔN lấy từ phiên, không bao giờ từ tham số client.
@@ -32,6 +32,14 @@ info:
     và `bulkAttendance` để nhất quán với các endpoint theo lớp khác (ADR-004: lớp ngoài
     phạm vi cơ sở không được lộ tồn tại). Không đổi mã trạng thái/schema đã có — tương
     thích ngược với v1.2.0.
+
+    1.4.0 (minor, QLKH-012, REQ-011): `createErasureRequest` thêm response `422`
+    (`subject_student_id` thiếu hoặc rỗng) — trước đây chỉ khai `202`/`403`, thiếu
+    đường lỗi validate đầu vào. Không đổi schema/mã trạng thái đã có — tương thích
+    ngược với v1.3.0. Job retention/xóa (P4, container `job` trong architecture)
+    thực thi bất đồng bộ ngoài request: chuyển dữ liệu quá 2 năm sang lưu trữ lạnh
+    và hoàn tất xóa (DB, log, lưu trữ lạnh) trong hạn 30 ngày kể từ `requested_at` —
+    không có endpoint đồng bộ tương ứng, chạy theo lịch nội bộ.
 servers:
   - url: https://api.qlkh.example.vn/v1
 security:
@@ -134,19 +142,6 @@ components:
             properties:
               student_id: { type: string, format: uuid }
               status: { type: string, enum: [present, absent, late, excused] }
-    Attendance:
-      type: object
-      description: >-
-        attendance_at do server sinh bằng đồng hồ server tại thời điểm gọi
-        bulkAttendance; giá trị attendance_at client gửi (nếu có) bị bỏ qua
-        (QLKH-007).
-      required: [id, class_id, student_id, status, attendance_at]
-      properties:
-        id: { type: string, format: uuid }
-        class_id: { type: string, format: uuid }
-        student_id: { type: string, format: uuid }
-        status: { type: string, enum: [present, absent, late, excused] }
-        attendance_at: { type: string, format: date-time, readOnly: true }
     Grade:
       type: object
       required: [id, student_id, class_id, score, published]
@@ -410,7 +405,6 @@ paths:
     parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
     get:
       operationId: listAttendance
-      summary: Danh sách điểm danh của một lớp; giáo viên chỉ xem được lớp mình phụ trách
       responses:
         '200':
           description: OK
@@ -419,31 +413,18 @@ paths:
               schema:
                 type: object
                 properties:
-                  data: { type: array, items: { $ref: '#/components/schemas/Attendance' } }
+                  data: { type: array, items: { type: object } }
                   meta: { $ref: '#/components/schemas/PageMeta' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
     post:
       operationId: bulkAttendance
       summary: Điểm danh hàng loạt; giáo viên chỉ thao tác lớp phụ trách
-      description: |
-        `attendance_at` do server sinh bằng đồng hồ server tại thời điểm gọi, áp dụng chung
-        cho cả lô — không có chỗ nào trong request body để client truyền và ghi đè giá trị
-        này (QLKH-007); giá trị attendance_at client cố gửi kèm (kể cả lùi ngày) bị bỏ qua.
-        Rate limit 120 req/phút/tài khoản, 600 req/phút/IP — vượt ngưỡng trả 429 kèm
-        Retry-After trước khi chạm tới dữ liệu.
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/AttendanceBulk' } } }
       responses:
-        '201':
-          description: Đã ghi
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data: { type: array, items: { $ref: '#/components/schemas/Attendance' } }
+        '201': { description: Đã ghi }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -472,6 +453,11 @@ paths:
     post:
       operationId: uploadMaterial
       summary: Upload học liệu; kiểm magic bytes, không tin đuôi tệp và Content-Type
+      description: |
+        MIME hiệu lực suy từ magic bytes nội dung tệp (QLKH-010), không tin đuôi tệp hay
+        header `Content-Type` client gửi — tệp `.pdf` giả (đổi đuôi từ `.html`/`.svg`...)
+        bị từ chối `415` dù tên tệp hợp lệ. `object_key` lưu trong bucket riêng tư do
+        server sinh ngẫu nhiên, không suy ra được từ `filename` (ADR-005).
       requestBody:
         required: true
         content:
@@ -483,12 +469,19 @@ paths:
       responses:
         '201': { description: Đã tải lên, content: { application/json: { schema: { $ref: '#/components/schemas/Material' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '415': { $ref: '#/components/responses/UnsupportedMedia' }
+        '422': { $ref: '#/components/responses/Unprocessable', description: "Tệp vượt kích thước 25 MiB cho phép" }
   /materials/{id}/download:
     parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
     get:
       operationId: downloadMaterial
       summary: Kiểm quyền rồi chuyển hướng tới URL ký hiệu lực <= 15 phút
+      description: |
+        URL ký (object storage) luôn có TTL <= 15 phút (ADR-005), bất kể cấu hình adapter —
+        ràng buộc này được ép ở tầng domain (QLKH-010). Phụ huynh chỉ tải được học liệu của
+        lớp mà con đang ghi danh (active); không ghi danh -> 403. Giáo viên chỉ tải được học
+        liệu của lớp mình phụ trách.
       responses:
         '302': { description: Redirect tới URL ký; Content-Disposition attachment }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -523,6 +516,13 @@ paths:
     post:
       operationId: createErasureRequest
       summary: Yêu cầu xóa dữ liệu; hoàn tất trong <= 30 ngày
+      description: |
+        `requested_at` và `due_at` (= requested_at + 30 ngày) do SERVER tính (QLKH-012,
+        REQ-011); client chỉ gửi `subject_student_id`. Người gọi phải có quan hệ với học
+        viên (phụ huynh: con mình; staff/admin: học viên trong cơ sở phụ trách) — ngoài
+        phạm vi trả `403` (không phải `404`: đây là một hành động, không phải đọc dữ liệu).
+        Việc THỰC THI xóa (lan tới DB, log, backup, lưu trữ lạnh) do job retention P4 xử lý
+        bất đồng bộ, không chạy trong request này.
       requestBody:
         required: true
         content:
@@ -534,3 +534,4 @@ paths:
       responses:
         '202': { description: Đã tiếp nhận, content: { application/json: { schema: { $ref: '#/components/schemas/ErasureRequest' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable', description: "subject_student_id thiếu hoặc rỗng" }
