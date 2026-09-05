@@ -280,3 +280,62 @@ class NotificationSink(Protocol):
     ) -> None:
         """Báo phụ huynh khi một điểm ĐÃ CÔNG BỐ của con mình bị sửa."""
         ...
+
+
+class MaterialRepository(Protocol):
+    """Giao diện truy cập bảng `materials` — bắt buộc đi qua SubjectContext
+    (QLKH-010, REQ-007).
+
+    `class_id` đã được service kiểm 404/403 qua `ClassRepository` trước khi
+    gọi `create`; `get_by_id` KHÔNG lọc theo lớp phụ trách/ghi danh — chỉ tra
+    bản ghi thô theo id, để service tự kiểm quyền qua `ClassRepository` +
+    `ctx.can_access_class` (cùng một chỗ duy nhất quyết định 403 so với 404,
+    tránh hai nguồn sự thật về quyền truy cập lớp).
+    """
+
+    def create(
+        self,
+        ctx: SubjectContext,
+        class_id: str,
+        *,
+        filename: str,
+        mime_type: str,
+        size_bytes: int,
+        object_key: str,
+    ) -> dict[str, Any]:
+        """Ghi metadata học liệu; `object_key` do service sinh ngẫu nhiên,
+        không suy ra được từ `filename` (ADR-005)."""
+        ...
+
+    def get_by_id(self, ctx: SubjectContext, material_id: str) -> dict[str, Any] | None:
+        """Lấy bản ghi học liệu theo id; trả None nếu không tồn tại.
+
+        Không tự áp bộ lọc quyền theo lớp ở đây — service làm việc đó qua
+        `ClassRepository.get_by_id` + `ctx.can_access_class` để giữ một nguồn
+        sự thật duy nhất về 404 so với 403 (giống `ClassService`).
+        """
+        ...
+
+
+class BlobStorage(Protocol):
+    """Giao diện bucket riêng tư lưu học liệu (D3, ADR-005).
+
+    Không import SDK object storage cụ thể ở application/domain layer —
+    adapter hạ tầng hiện thực Protocol này. Bucket luôn riêng tư (không có
+    phương thức nào ở đây phơi ra cấu hình public-read); quét IaC là lớp
+    kiểm bổ sung độc lập (RISK-5, `policy/storage.rego`).
+    """
+
+    def put_object(self, object_key: str, content: bytes, *, content_type: str) -> None:
+        """Ghi tệp vào bucket riêng tư dưới `object_key` (ngẫu nhiên, không
+        suy ra được từ filename)."""
+        ...
+
+    def generate_signed_url(self, object_key: str, *, ttl_seconds: int) -> str:
+        """Sinh URL ký có hiệu lực `ttl_seconds` giây.
+
+        Caller (MaterialService) LUÔN ép `ttl_seconds` <= 15 phút qua
+        `qlkh.domain.material_policy.clamp_signed_url_ttl` trước khi gọi —
+        adapter không tự ý nới TTL.
+        """
+        ...
