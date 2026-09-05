@@ -65,7 +65,9 @@ class AuthError(Exception):
 
     @property
     def status(self) -> int:
-        return int(self.problem["status"])  # type: ignore[arg-type]
+        status = self.problem["status"]
+        assert isinstance(status, int), status
+        return status
 
 
 class InvalidCredentials(AuthError):

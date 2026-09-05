@@ -182,9 +182,7 @@ def env():
 
 def test_login_success_creates_server_session(env):
     service, _, sessions, _ = env
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="1.1.1.1"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="1.1.1.1")
     assert session.session_id in sessions.data
     assert session.role == "teacher"
     assert session.branch_ids == (BRANCH_A,)
@@ -213,9 +211,7 @@ def test_g1_disabled_account_same_message(env):
     service, users, _, _ = env
     users.deactivate("teacher@example.vn")
     with pytest.raises(AuthError) as disabled:
-        service.login(
-            email="teacher@example.vn", password="correct-horse", ip="3.3.3.3"
-        )
+        service.login(email="teacher@example.vn", password="correct-horse", ip="3.3.3.3")
     with pytest.raises(AuthError) as unknown:
         service.login(email="nobody@example.vn", password="x" * 12, ip="4.4.4.4")
     assert disabled.value.problem == unknown.value.problem
@@ -241,28 +237,20 @@ def test_g2_lockout_after_five_failures(env):
     service, _, _, clock = env
     for _ in range(MAX_FAILED_ATTEMPTS):
         with pytest.raises(InvalidCredentials):
-            service.login(
-                email="teacher@example.vn", password="bad-pass-1", ip="5.5.5.5"
-            )
+            service.login(email="teacher@example.vn", password="bad-pass-1", ip="5.5.5.5")
     with pytest.raises(AccountLocked) as locked:
-        service.login(
-            email="teacher@example.vn", password="correct-horse", ip="5.5.5.5"
-        )
+        service.login(email="teacher@example.vn", password="correct-horse", ip="5.5.5.5")
     assert locked.value.status == 429
     assert 0 < locked.value.retry_after <= int(LOCKOUT_DURATION.total_seconds())
 
     # Vẫn khóa ngay trước khi hết 15 phút
     clock.advance(LOCKOUT_DURATION - timedelta(seconds=1))
     with pytest.raises(AccountLocked):
-        service.login(
-            email="teacher@example.vn", password="correct-horse", ip="5.5.5.5"
-        )
+        service.login(email="teacher@example.vn", password="correct-horse", ip="5.5.5.5")
 
     # Hết 15 phút thì mở khóa
     clock.advance(timedelta(seconds=2))
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="5.5.5.5"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="5.5.5.5")
     assert session.user_id == "u-teacher"
 
 
@@ -274,9 +262,7 @@ def test_g2_failures_outside_window_do_not_lock(env):
     clock.advance(timedelta(minutes=16))
     with pytest.raises(InvalidCredentials):
         service.login(email="teacher@example.vn", password="bad", ip="6.6.6.6")
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="6.6.6.6"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="6.6.6.6")
     assert session.session_id
 
 
@@ -286,9 +272,7 @@ def test_g2_shared_ip_does_not_lock_out_legitimate_user(env):
     for i in range(MAX_FAILED_ATTEMPTS):
         with pytest.raises(InvalidCredentials):
             service.login(email=f"u{i}@example.vn", password="bad-pass", ip="7.7.7.7")
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="7.7.7.7"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="7.7.7.7")
     assert session.user_id == "u-teacher"
 
 
@@ -297,20 +281,14 @@ def test_g2_ip_throttle_is_backoff_not_hard_lock(env):
     service, _, _, clock = env
     for i in range(IP_THROTTLE_THRESHOLD):
         with pytest.raises(InvalidCredentials):
-            service.login(
-                email=f"bulk{i}@example.vn", password="bad-pass", ip="7.7.7.8"
-            )
+            service.login(email=f"bulk{i}@example.vn", password="bad-pass", ip="7.7.7.8")
     with pytest.raises(AccountLocked) as throttled:
-        service.login(
-            email="teacher@example.vn", password="correct-horse", ip="7.7.7.8"
-        )
+        service.login(email="teacher@example.vn", password="correct-horse", ip="7.7.7.8")
     assert throttled.value.status == 429
     assert 0 < throttled.value.retry_after <= 60
 
     clock.advance(timedelta(seconds=61))
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="7.7.7.8"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="7.7.7.8")
     assert session.user_id == "u-teacher"
 
 
@@ -340,21 +318,15 @@ def test_production_requires_shared_attempt_store():
         account_attempts=SharedAttemptStore(ACCOUNT_POLICY),
         ip_attempts=SharedAttemptStore(IP_POLICY),
     )
-    assert service.login(
-        email="teacher@example.vn", password="correct-horse", ip="1.9.9.9"
-    )
+    assert service.login(email="teacher@example.vn", password="correct-horse", ip="1.9.9.9")
 
 
 def test_g3_disabled_user_old_session_rejected_immediately(env):
     service, users, _, _ = env
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="9.9.9.9"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="9.9.9.9")
     assert service.me(session.session_id)["user_id"] == "u-teacher"
 
-    revoked = service.deactivate_account(
-        "u-teacher", lambda _uid: users.deactivate("teacher@example.vn")
-    )
+    revoked = service.deactivate_account("u-teacher", lambda _uid: users.deactivate("teacher@example.vn"))
     assert revoked == 1
     with pytest.raises(AuthError) as exc:
         service.me(session.session_id)
@@ -364,9 +336,7 @@ def test_g3_disabled_user_old_session_rejected_immediately(env):
 def test_g3_session_rejected_even_if_revoke_was_missed(env):
     """SD-31: phiên còn trong store nhưng tài khoản đã tắt → vẫn 401."""
     service, users, sessions, _ = env
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="9.9.9.8"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="9.9.9.8")
     users.deactivate("teacher@example.vn")  # cố ý KHÔNG gọi revoke
     assert session.session_id in sessions.data
     with pytest.raises(AuthError) as exc:
@@ -403,9 +373,7 @@ def test_g4_admin_with_valid_mfa_succeeds(env):
 
 def test_logout_is_idempotent(env):
     service, _, sessions, _ = env
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="1.2.3.7"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="1.2.3.7")
     service.logout(session.session_id)
     service.logout(session.session_id)
     assert session.session_id not in sessions.data
@@ -415,9 +383,7 @@ def test_logout_is_idempotent(env):
 
 def test_expired_session_rejected(env):
     service, _, _, clock = env
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="1.2.3.8"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="1.2.3.8")
     clock.advance(timedelta(hours=13))
     with pytest.raises(AuthError):
         service.me(session.session_id)
@@ -431,9 +397,7 @@ def test_missing_session_cookie_rejected(env):
 
 def test_subject_context_branches_come_from_session(env):
     service, _, _, _ = env
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="1.2.3.9"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="1.2.3.9")
     ctx = service.subject_context(session.session_id)
     assert ctx.allowed_branch_ids == (BRANCH_A,)
     assert ctx.can_access_branch("bbbbbbbb-0000-0000-0000-000000000002") is False
@@ -441,6 +405,4 @@ def test_subject_context_branches_come_from_session(env):
 
 def test_email_is_case_and_space_insensitive(env):
     service, _, _, _ = env
-    assert service.login(
-        email="  Teacher@Example.VN ", password="correct-horse", ip="1.2.3.10"
-    )
+    assert service.login(email="  Teacher@Example.VN ", password="correct-horse", ip="1.2.3.10")

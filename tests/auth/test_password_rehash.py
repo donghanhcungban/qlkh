@@ -61,12 +61,8 @@ def _failing(user_id: str, new_hash: str) -> None:
 
 def test_rehash_written_once_on_successful_login():
     written, sink = _sink()
-    service, _, sessions, _ = build_service(
-        hasher=OutdatedHasher(), on_password_rehash=sink
-    )
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="1.1.1.1"
-    )
+    service, _, sessions, _ = build_service(hasher=OutdatedHasher(), on_password_rehash=sink)
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="1.1.1.1")
     assert session.session_id in sessions.data
     assert len(written) == 1
     assert written[0][0] == "u-teacher"
@@ -81,21 +77,15 @@ def test_no_rehash_when_parameters_current():
 
 
 def test_login_succeeds_when_rehash_persist_fails():
-    service, _, sessions, _ = build_service(
-        hasher=OutdatedHasher(), on_password_rehash=_failing
-    )
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="1.1.1.1"
-    )
+    service, _, sessions, _ = build_service(hasher=OutdatedHasher(), on_password_rehash=_failing)
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="1.1.1.1")
     assert session.session_id in sessions.data
 
 
 def test_rehash_failure_emits_metric_for_alerting():
     """Hỏng âm thầm là rủi ro thật: mỗi lần hỏng phải đếm được."""
     metrics = RecordingMetrics()
-    service, _, _, _ = build_service(
-        hasher=OutdatedHasher(), on_password_rehash=_failing, metrics=metrics
-    )
+    service, _, _, _ = build_service(hasher=OutdatedHasher(), on_password_rehash=_failing, metrics=metrics)
     service.login(email="teacher@example.vn", password="correct-horse", ip="1.1.1.1")
     assert metrics.counts == {METRIC_REHASH_FAILED: 1}
 
@@ -103,9 +93,7 @@ def test_rehash_failure_emits_metric_for_alerting():
 def test_no_metric_when_rehash_succeeds():
     metrics = RecordingMetrics()
     written, sink = _sink()
-    service, _, _, _ = build_service(
-        hasher=OutdatedHasher(), on_password_rehash=sink, metrics=metrics
-    )
+    service, _, _, _ = build_service(hasher=OutdatedHasher(), on_password_rehash=sink, metrics=metrics)
     service.login(email="teacher@example.vn", password="correct-horse", ip="1.1.1.1")
     assert metrics.counts == {}
     assert len(written) == 1
@@ -115,18 +103,14 @@ def test_broken_metrics_sink_does_not_break_login():
     service, _, sessions, _ = build_service(
         hasher=OutdatedHasher(), on_password_rehash=_failing, metrics=BrokenMetrics()
     )
-    session = service.login(
-        email="teacher@example.vn", password="correct-horse", ip="1.1.1.1"
-    )
+    session = service.login(email="teacher@example.vn", password="correct-horse", ip="1.1.1.1")
     assert session.session_id in sessions.data
 
 
 def test_no_rehash_on_failed_login():
     written, sink = _sink()
     metrics = RecordingMetrics()
-    service, _, _, _ = build_service(
-        hasher=OutdatedHasher(), on_password_rehash=sink, metrics=metrics
-    )
+    service, _, _, _ = build_service(hasher=OutdatedHasher(), on_password_rehash=sink, metrics=metrics)
     with pytest.raises(AuthError):
         service.login(email="teacher@example.vn", password="wrong-pass", ip="1.1.1.1")
     with pytest.raises(AuthError):

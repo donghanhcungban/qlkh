@@ -123,9 +123,7 @@ class InMemoryAttemptStore:
         self._counters: OrderedDict[str, FailureCounter] = OrderedDict()
 
     def _sweep(self, now: datetime, keep: str | None = None) -> None:
-        expired = [
-            k for k, c in self._counters.items() if k != keep and c.is_expired(now)
-        ]
+        expired = [k for k, c in self._counters.items() if k != keep and c.is_expired(now)]
         for key in expired:
             del self._counters[key]
         # Trần cứng: mục ít dùng nhất bị loại trước (SD-29).
@@ -225,19 +223,12 @@ class AuthService:
         self._on_password_rehash = on_password_rehash
         self._metrics = metrics
         self._account_attempts: AttemptStore = (
-            InMemoryAttemptStore(ACCOUNT_POLICY)
-            if account_attempts is None
-            else account_attempts
+            InMemoryAttemptStore(ACCOUNT_POLICY) if account_attempts is None else account_attempts
         )
-        self._ip_attempts: AttemptStore = (
-            InMemoryAttemptStore(IP_POLICY) if ip_attempts is None else ip_attempts
-        )
-        if require_shared_store and not (
-            self._account_attempts.shared and self._ip_attempts.shared
-        ):
+        self._ip_attempts: AttemptStore = InMemoryAttemptStore(IP_POLICY) if ip_attempts is None else ip_attempts
+        if require_shared_store and not (self._account_attempts.shared and self._ip_attempts.shared):
             raise RuntimeError(
-                "Khóa tạm phải nằm ở store dùng chung (session store P2) khi chạy "
-                "nhiều tiến trình/replica — SD-29."
+                "Khóa tạm phải nằm ở store dùng chung (session store P2) khi chạy nhiều tiến trình/replica — SD-29."
             )
         # SD-28: mã băm dummy THẬT, cùng tham số, sinh một lần lúc khởi động.
         self._dummy_hash = hasher.hash(secrets.token_urlsafe(32))
@@ -336,11 +327,7 @@ class AuthService:
             raise InvalidCredentials()
 
         if user.role in MFA_REQUIRED_ROLES:
-            if (
-                not mfa_code
-                or not user.mfa_secret
-                or not self._mfa.verify(user.mfa_secret, mfa_code)
-            ):
+            if not mfa_code or not user.mfa_secret or not self._mfa.verify(user.mfa_secret, mfa_code):
                 self._register_failure(email, ip)
                 raise InvalidCredentials()
 

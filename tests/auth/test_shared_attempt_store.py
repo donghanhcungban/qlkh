@@ -267,18 +267,14 @@ def test_two_workers_share_threshold_lock_at_fifth_total_failure() -> None:
     workers = [worker_a, worker_b, worker_a, worker_b]
     for worker in workers:
         with pytest.raises(InvalidCredentials):
-            worker.login(
-                email="teacher@example.vn", password="sai", ip="203.0.113.1"
-            )
+            worker.login(email="teacher@example.vn", password="sai", ip="203.0.113.1")
 
     # Lần sai thứ 5 tổng cộng (không phải thứ 5 trên MỖI worker) gây khóa.
     with pytest.raises(InvalidCredentials):
         worker_a.login(email="teacher@example.vn", password="sai", ip="203.0.113.1")
 
     with pytest.raises(AccountLocked) as exc:
-        worker_b.login(
-            email="teacher@example.vn", password="correct-horse", ip="203.0.113.1"
-        )
+        worker_b.login(email="teacher@example.vn", password="correct-horse", ip="203.0.113.1")
     assert exc.value.status == 429
     assert exc.value.retry_after == int(LOCKOUT_DURATION.total_seconds())
 
@@ -293,12 +289,8 @@ def test_successful_login_on_one_worker_resets_shared_counter() -> None:
 
     for _ in range(MAX_FAILED_ATTEMPTS - 1):
         with pytest.raises(InvalidCredentials):
-            worker_a.login(
-                email="teacher@example.vn", password="sai", ip="203.0.113.1"
-            )
+            worker_a.login(email="teacher@example.vn", password="sai", ip="203.0.113.1")
 
-    session = worker_b.login(
-        email="teacher@example.vn", password="correct-horse", ip="203.0.113.1"
-    )
+    session = worker_b.login(email="teacher@example.vn", password="correct-horse", ip="203.0.113.1")
     assert session.user_id == TEACHER.user_id
     assert account.retry_after("teacher@example.vn", clock()) is None

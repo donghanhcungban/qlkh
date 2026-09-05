@@ -35,6 +35,8 @@ jobs:
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      # SD-13: phụ thuộc runtime cài từ lockfile có hash; lệch hash hay thiếu hash là fail (T-12).
+      - run: pip install --require-hashes -r requirements.lock
       - run: pip install pytest==8.3.3 pytest-cov==5.0.0 pyyaml==6.0.2
       - run: pytest --cov=qlkh --cov=tools --cov-branch --cov-fail-under=80
 
