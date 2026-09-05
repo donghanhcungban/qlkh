@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: QLKH LMS API
-  version: 1.2.0
+  version: 1.3.0
   description: |
     Contract-first. Nguồn sự thật duy nhất của API QLKH.
     Uỷ quyền áp ở tầng dữ liệu (ADR-004): branch_id LUÔN lấy từ phiên, không bao giờ từ tham số client.
@@ -22,6 +22,16 @@ info:
     thêm `DELETE /classes/{id}/enrollments/{studentId}` (operationId `unenrollStudent`,
     idempotent — hủy ghi danh không tồn tại vẫn 204) để đóng phần "DELETE enrollment"
     còn thiếu trong scope. Không đổi schema/mã trạng thái đã có — tương thích ngược.
+
+    1.3.0 (minor, QLKH-007, REQ-005): thêm schema `Attendance` (attendance_at readOnly —
+    server sinh bằng đồng hồ server tại thời điểm điểm danh, giá trị client gửi bị bỏ qua,
+    cùng nguyên tắc với `enrolled_at`); `listAttendance` giờ trả `{data, meta}` kiểu
+    `Attendance[]` thay vì `object` rỗng trước đây (làm rõ hình dạng, không phải breaking
+    change vì trước đó chỉ khai `type: object` không có `properties` ràng buộc, mọi client
+    tuân contract cũ vẫn đọc được trường mới); thêm response `404` cho cả `listAttendance`
+    và `bulkAttendance` để nhất quán với các endpoint theo lớp khác (ADR-004: lớp ngoài
+    phạm vi cơ sở không được lộ tồn tại). Không đổi mã trạng thái/schema đã có — tương
+    thích ngược với v1.2.0.
 servers:
   - url: https://api.qlkh.example.vn/v1
 security:
@@ -124,6 +134,19 @@ components:
             properties:
               student_id: { type: string, format: uuid }
               status: { type: string, enum: [present, absent, late, excused] }
+    Attendance:
+      type: object
+      description: >-
+        attendance_at do server sinh bằng đồng hồ server tại thời điểm gọi
+        bulkAttendance; giá trị attendance_at client gửi (nếu có) bị bỏ qua
+        (QLKH-007).
+      required: [id, class_id, student_id, status, attendance_at]
+      properties:
+        id: { type: string, format: uuid }
+        class_id: { type: string, format: uuid }
+        student_id: { type: string, format: uuid }
+        status: { type: string, enum: [present, absent, late, excused] }
+        attendance_at: { type: string, format: date-time, readOnly: true }
     Grade:
       type: object
       required: [id, student_id, class_id, score, published]
@@ -387,18 +410,42 @@ paths:
     parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
     get:
       operationId: listAttendance
+      summary: Danh sách điểm danh của một lớp; giáo viên chỉ xem được lớp mình phụ trách
       responses:
-        '200': { description: OK, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Attendance' } }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     post:
       operationId: bulkAttendance
       summary: Điểm danh hàng loạt; giáo viên chỉ thao tác lớp phụ trách
+      description: |
+        `attendance_at` do server sinh bằng đồng hồ server tại thời điểm gọi, áp dụng chung
+        cho cả lô — không có chỗ nào trong request body để client truyền và ghi đè giá trị
+        này (QLKH-007); giá trị attendance_at client cố gửi kèm (kể cả lùi ngày) bị bỏ qua.
+        Rate limit 120 req/phút/tài khoản, 600 req/phút/IP — vượt ngưỡng trả 429 kèm
+        Retry-After trước khi chạm tới dữ liệu.
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/AttendanceBulk' } } }
       responses:
-        '201': { description: Đã ghi }
+        '201':
+          description: Đã ghi
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Attendance' } }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
   /classes/{id}/grades:

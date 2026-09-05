@@ -130,3 +130,41 @@ class ClassRepository(Protocol):
 
 class EnrollmentConflict(Exception):
     """Học viên đã có ghi danh active trong lớp (409) — repository ném lên."""
+
+
+class AttendanceRepository(Protocol):
+    """Giao diện truy cập bảng `attendance` — bắt buộc đi qua SubjectContext
+    (QLKH-007, REQ-005).
+
+    `bulk_insert` nhận `attendance_at` DUY NHẤT từ tham số do service tính
+    (đồng hồ server); không có phương thức nào nhận attendance_at trực tiếp
+    từ dữ liệu client. `class_id` đã được service kiểm quyền (404/403) trước
+    khi gọi tới đây — repository chỉ còn việc lọc thêm branch_id khi ghi/đọc
+    theo đúng nguyên tắc P3.
+    """
+
+    def bulk_insert(
+        self,
+        ctx: SubjectContext,
+        class_id: str,
+        entries: list[dict[str, Any]],
+        *,
+        attendance_at: Any,
+    ) -> list[dict[str, Any]]:
+        """Ghi điểm danh hàng loạt cho một lớp; mỗi entry có student_id, status.
+
+        `attendance_at` áp dụng chung cho cả lô (một lần gọi = một mốc thời
+        gian điểm danh), do service truyền — không đọc từ entry.
+        """
+        ...
+
+    def list_for_class(
+        self,
+        ctx: SubjectContext,
+        class_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Danh sách điểm danh của một lớp; cursor-based pagination."""
+        ...
