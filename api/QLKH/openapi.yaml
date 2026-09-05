@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: QLKH LMS API
-  version: 1.4.0
+  version: 1.4.1
   description: |
     Contract-first API cho QLKH LMS. Uỷ quyền áp dụng ở tầng dữ liệu (ADR-004):
     mọi truy vấn chạm PII được lọc theo SubjectContext (branch_id/quan hệ phụ
@@ -16,6 +16,11 @@ info:
     hành động ghi có chủ đích, không phải truy vấn đọc theo phạm vi ẩn danh.
     Việc thực thi xóa (DB/log/lưu trữ lạnh) do job retention P4 đảm nhận bất
     đồng bộ ngoài vòng đời request; không có endpoint đồng bộ để xóa ngay.
+    → 1.4.1 (QLKH-012, sửa lỗi contract-code lệch pha): createErasureRequest
+    trả 202 (không phải 201) — khớp hiện thực `erasure_http.py` và
+    `test_erasure_http.py` đã có sẵn: tài nguyên trả về mô tả một yêu cầu
+    ĐANG chờ xử lý (status=pending), việc xóa thật do job P4 thực thi sau;
+    bỏ header `Location` tương ứng (không phát ra trong response thật).
 servers:
   - url: https://api.qlkh.example.vn/v1
 paths:
@@ -319,10 +324,14 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/ErasureRequestCreate" }
       responses:
-        "201":
-          description: Created
-          headers:
-            Location: { schema: { type: string } }
+        "202":
+          description: |
+            Accepted — yêu cầu xóa đã được ghi nhận (status=pending); việc
+            xóa thật do job retention P4 thực thi bất đồng bộ trước `due_at`
+            (QLKH-012 v1.4.1, sửa từ 201 ở v1.4.0: 202 đúng ngữ nghĩa hơn vì
+            tài nguyên trả về mô tả một yêu cầu ĐANG chờ xử lý, không phải
+            kết quả đã hoàn tất; khớp hiện thực `erasure_http.py` và bộ test
+            `test_erasure_http.py::test_tao_thanh_cong_tra_202` đã có sẵn).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErasureRequest" }
