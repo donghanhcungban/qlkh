@@ -1,6 +1,6 @@
 package main
 
-# Policy hạ tầng QLKH (T-05, T-13, SD-10, ADR-005, ADR-006).
+# Policy hạ tầng QLKH (T-05, T-13, SD-10, ADR-005, ADR-006, QLKH-013/NFR-006).
 # Chạy bằng: conftest test ./infra --policy ./policy --all-namespaces
 #
 # SD-10: phân loại dữ liệu chỉ có MỘT nguồn sự thật là tag `data-class`.
@@ -23,6 +23,15 @@ storage_types := {
 	"object_store",
 	"volume",
 	"backup",
+}
+
+# QLKH-013 (NFR-006): sink log/giám sát cũng là tài nguyên hạ tầng phải ở vùng
+# VN — residency áp dụng cho DB/bucket/log, không chỉ nơi lưu PII trực tiếp.
+log_types := {
+	"log_sink",
+	"logging_sink",
+	"log_group",
+	"observability_sink",
 }
 
 resources[[type, name, body]] {
@@ -109,4 +118,21 @@ deny[msg] {
 	is_pii(body)
 	not vn_regions[body.region]
 	msg := sprintf("%s.%s: dữ liệu PII phải đặt trong vùng VN (T-13)", [type, name])
+}
+
+# QLKH-013 acceptance 3: mọi DB/bucket/log phải ở vùng VN, kể cả khi chưa (hoặc
+# không) mang nhãn PII — residency là thuộc tính của hạ tầng, không chỉ của dữ
+# liệu nhạy cảm (release-check chạy policy này trước khi cho phép apply).
+deny[msg] {
+	[type, name, body] := resources[_]
+	storage_types[type]
+	not vn_regions[body.region]
+	msg := sprintf("%s.%s: hạ tầng lưu trữ (DB/bucket) phải đặt trong vùng VN (NFR-006)", [type, name])
+}
+
+deny[msg] {
+	[type, name, body] := resources[_]
+	log_types[type]
+	not vn_regions[body.region]
+	msg := sprintf("%s.%s: sink log/giám sát phải đặt trong vùng VN (NFR-006, QLKH-013)", [type, name])
 }

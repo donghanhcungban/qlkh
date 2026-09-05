@@ -97,3 +97,41 @@ test_principal_sao_trong_statement_bi_chan {
 	}}}}
 	count(deny) > 0 with input as bad
 }
+
+# QLKH-013 (NFR-006, acceptance 3) — DB/bucket ngoài VN bị chặn dù không phải PII.
+test_bucket_khong_pii_ngoai_vn_van_bi_chan {
+	non_pii := {"resource": {"bucket": {"public_assets": {
+		"acl": "private",
+		"encryption_at_rest": true,
+		"region": "us-east-1",
+		"tags": {"project": "QLKH", "env": "dev", "owner": "platform", "cost-center": "CC-01", "data-class": "internal"},
+	}}}}
+	deny["bucket.public_assets: hạ tầng lưu trữ (DB/bucket) phải đặt trong vùng VN (NFR-006)"] with input as non_pii
+}
+
+test_db_o_vung_vn_khong_bi_chan_boi_quy_tac_residency {
+	db := {"resource": {"database": {"core": {
+		"acl": "private",
+		"encryption_at_rest": true,
+		"region": "vn-hcm-1",
+		"tags": {"project": "QLKH", "env": "prod", "owner": "platform", "cost-center": "CC-01", "data-class": "pii"},
+	}}}}
+	count(deny) == 0 with input as db
+}
+
+# QLKH-013 — sink log/giám sát ngoài VN bị chặn (release-check DB/bucket/log).
+test_log_sink_ngoai_vn_bi_chan {
+	bad := {"resource": {"log_sink": {"central_logging": {
+		"tags": {"project": "QLKH", "env": "prod", "owner": "platform", "cost-center": "CC-01", "data-class": "internal"},
+		"region": "eu-west-1",
+	}}}}
+	deny["log_sink.central_logging: sink log/giám sát phải đặt trong vùng VN (NFR-006, QLKH-013)"] with input as bad
+}
+
+test_log_sink_trong_vn_khong_bi_chan {
+	good := {"resource": {"log_sink": {"central_logging": {
+		"tags": {"project": "QLKH", "env": "prod", "owner": "platform", "cost-center": "CC-01", "data-class": "internal"},
+		"region": "vn-hcm-1",
+	}}}}
+	count(deny) == 0 with input as good
+}
