@@ -68,7 +68,14 @@ class RecordingAudit:
 
 @pytest.fixture()
 def students():
-    return {STUDENT_A: {"id": STUDENT_A, "full_name": "Bé A", "branch_id": BRANCH_Q1}}
+    return {
+        STUDENT_A: {
+            "id": STUDENT_A,
+            "full_name": "Bé A",
+            "branch_id": BRANCH_Q1,
+            "parent_phone": "+84901234567",
+        }
+    }
 
 
 @pytest.fixture()
@@ -139,6 +146,44 @@ class TestGetStudent404KhongLoTonTai:
         other_ctx = SubjectContext(user_id="staff-2", role="staff", allowed_branch_ids=("khac",))
         result = handlers.get_student(other_ctx, STUDENT_A)
         assert result.status == 404
+
+
+class TestParentPhoneMaskedTrenMoiResponse:
+    """RISK-3/RISK-9/NFR-007: parent_phone thô KHÔNG bao giờ rời tầng HTTP."""
+
+    def test_get_student_khong_co_parent_phone_tho(self, handlers, ctx):
+        result = handlers.get_student(ctx, STUDENT_A)
+        assert result.status == 200
+        assert "parent_phone" not in result.body
+        assert result.body["parent_phone_masked"] == "+84***567"
+
+    def test_list_students_khong_co_parent_phone_tho(self, handlers, ctx):
+        result = handlers.list_students(ctx, query={})
+        assert result.status == 200
+        for item in result.body["data"]:
+            assert "parent_phone" not in item
+            assert "parent_phone_masked" in item
+
+    def test_create_student_khong_co_parent_phone_tho(self, handlers, ctx):
+        result = handlers.create_student(
+            ctx,
+            {"full_name": "Bé B", "date_of_birth": "2015-01-01", "parent_phone": "+84987654321"},
+        )
+        assert result.status == 201
+        assert "parent_phone" not in result.body
+        assert result.body["parent_phone_masked"] == "+84***321"
+
+    def test_patch_student_khong_co_parent_phone_tho(self, handlers, ctx):
+        result = handlers.patch_student(ctx, STUDENT_A, {"parent_phone": "+84911111111"})
+        assert result.status == 200
+        assert "parent_phone" not in result.body
+        assert result.body["parent_phone_masked"] == "+84***111"
+
+    def test_khong_co_so_dien_thoai_thi_masked_la_none(self, handlers, ctx, students):
+        students[STUDENT_A]["parent_phone"] = None
+        result = handlers.get_student(ctx, STUDENT_A)
+        assert result.status == 200
+        assert result.body["parent_phone_masked"] is None
 
 
 class TestJsonAuditSink:

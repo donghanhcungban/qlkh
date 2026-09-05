@@ -24,6 +24,13 @@ Việc handler này đóng so với PR trước:
    contract (`Problem.type`), không lộ chi tiết nội bộ trong `detail`.
 3. `AuditSink` production ghi log JSON có `trace_id`, không log thô body — bản
    ghi audit không chứa parent_phone; chỉ chứa tên trường bị từ chối.
+4. Mask `parent_phone` trước khi trả ra client (RISK-3/RISK-9/NFR-007): repo
+   trả cột `parent_phone` thô từ DB (đúng thiết kế — mask KHÔNG phải việc của
+   tầng dữ liệu), nhưng contract `Student` chỉ có `parent_phone_masked`
+   (readOnly), không có `parent_phone` thô. Đây là lớp serialize/HTTP mà
+   docstring của repo nhắc tới: `_to_response_body` xoá `parent_phone` khỏi
+   mọi response và thay bằng `parent_phone_masked`, áp dụng cho cả 4 luồng
+   (get/list/create/patch) — không có đường nào trả `record` thô ra ngoài.
 """
 
 from __future__ import annotations
@@ -50,22 +57,36 @@ _KNOWN_PATCH_KEYS: frozenset[str] = ALLOWED_PATCH_FIELDS | FORBIDDEN_PATCH_FIELD
 
 _PROBLEM_BASE = "https://qlkh/errors"
 
-
-@dataclass(frozen=True)
-class HttpResult:
-    status: int
-    body: dict[str, Any]
+#: Số ký tự cuối giữ nguyên khi mask số điện thoại (vd "+84***123").
+_PHONE_VISIBLE_SUFFIX = 3
 
 
-def _problem(status: int, problem_type: str, title: str, detail: str | None = None) -> HttpResult:
-    body: dict[str, Any] = {
-        "type": f"{_PROBLEM_BASE}/{problem_type}",
-        "title": title,
-        "status": status,
-    }
-    if detail:
-        body["detail"] = detail
-    return HttpResult(status=status, body=body)
+def _mask_parent_phone(phone: str | None) -> str | None:
+    """Che số điện thoại phụ huynh: chỉ giữ tiền tố quốc gia/đầu và hậu tố.
+
+    Không trả None thành chuỗi "None"; giữ None nếu chưa có số nào lưu.
+    """
+    if phone is None:
+        return None
+    phone = str(phone)
+    if len(phone) <= _PHONE_VISIBLE_SUFFIX:
+        return "*" * len(phone)
+    prefix = phone[:3] if phone.startswith("+") else phone[:2]
+    suffix = phone[-_PHONE_VISIBLE_SUFFIX:]
+    return f"{prefix}***{suffix}"
+
+
+def _to_response_body(record: dict[str, Any]) -> dict[str, Any]:
+    """Map record của repo/service -> body HTTP theo contract `Student`.
+
+    Loại bỏ `parent_phone` thô (PII, không có trong contract) và thay bằng
+    `parent_phone_masked` (readOnly, contract Student). Đây là bước bắt buộc
+    trước khi bất kỳ record nào rời tầng HTTP (RISK-3, RISK-9, NFR-007).
+    """
+    body = dict(record)
+    raw_phone = body.pop("parent_phone", None)
+    body["parent_phone_masked"] = _mask_parent_phone(raw_phone)
+    return body
 
 
 class JsonAuditSink:
@@ -117,14 +138,15 @@ class StudentHttpHandlers:
             data, next_cursor = self._service.list_students(ctx, cursor=cursor, limit=limit)
         except InvalidPagination as exc:
             return _problem(422, "unprocessable", "Unprocessable", str(exc))
-        return HttpResult(status=200, body={"data": data, "meta": {"next_cursor": next_cursor}})
+        body_data = [_to_response_body(record) for record in data]
+        return HttpResult(status=200, body={"data": body_data, "meta": {"next_cursor": next_cursor}})
 
     def get_student(self, ctx: SubjectContext, student_id: str) -> HttpResult:
         try:
             record = self._service.get_student(ctx, student_id)
         except StudentNotFound:
             return _problem(404, "not-found", "Not Found")
-        return HttpResult(status=200, body=record)
+        return HttpResult(status=200, body=_to_response_body(record))
 
     def create_student(self, ctx: SubjectContext, raw_body: dict[str, Any]) -> HttpResult:
         try:
@@ -136,7 +158,7 @@ class StudentHttpHandlers:
             )
         except InvalidStudentInput as exc:
             return _problem(422, "unprocessable", "Unprocessable", str(exc))
-        return HttpResult(status=201, body=record)
+        return HttpResult(status=201, body=_to_response_body(record))
 
     def patch_student(
         self, ctx: SubjectContext, student_id: str, raw_body: dict[str, Any]
@@ -156,4 +178,21 @@ class StudentHttpHandlers:
             record = self._service.patch_student(ctx, student_id, raw_body)
         except StudentNotFound:
             return _problem(404, "not-found", "Not Found")
-        return HttpResult(status=200, body=record)
+        return HttpResult(status=200, body=_to_response_body(record))
+
+
+@dataclass(frozen=True)
+class HttpResult:
+    status: int
+    body: dict[str, Any]
+
+
+def _problem(status: int, problem_type: str, title: str, detail: str | None = None) -> HttpResult:
+    body: dict[str, Any] = {
+        "type": f"{_PROBLEM_BASE}/{problem_type}",
+        "title": title,
+        "status": status,
+    }
+    if detail:
+        body["detail"] = detail
+    return HttpResult(status=status, body=body)
