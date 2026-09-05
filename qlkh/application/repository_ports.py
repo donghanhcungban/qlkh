@@ -339,3 +339,80 @@ class BlobStorage(Protocol):
         adapter không tự ý nới TTL.
         """
         ...
+
+
+class ConsentRepository(Protocol):
+    """Giao diện truy cập bảng `consents` — bắt buộc đi qua SubjectContext
+    (QLKH-011, REQ-010).
+
+    Mỗi bản ghi đồng ý gắn với MỘT học viên và MỘT mục đích (`purpose`) duy
+    nhất — không có phương thức nào nhận danh sách purpose trong một lần ghi
+    (việc "gộp nhiều mục đích trong một request" bị chặn ở tầng service bằng
+    validate input, khớp CHECK/unique index `consents_active_purpose_uniq`
+    tầng DB, xem schema v3). `granted_at`/`revoked_at` do server sinh, không
+    có tham số nào nhận giá trị đó từ client.
+    """
+
+    def get_student_ref(
+        self,
+        ctx: SubjectContext,
+        student_id: str,
+    ) -> dict[str, Any] | None:
+        """Xác nhận học viên tồn tại VÀ ctx có quyền truy cập (P3).
+
+        Trả None nếu không tồn tại HOẶC ngoài phạm vi ctx — không lộ sự tồn
+        tại (404 ở HTTP), cùng khuôn mẫu `GradeRepository.get_student_ref`.
+        """
+        ...
+
+    def create(
+        self,
+        ctx: SubjectContext,
+        *,
+        student_id: str,
+        purpose: str,
+        document_version: str,
+    ) -> dict[str, Any]:
+        """Ghi một bản ghi đồng ý mới; `granted_at` do server sinh, `status`
+        luôn khởi tạo là `granted`."""
+        ...
+
+    def get_by_id(
+        self,
+        ctx: SubjectContext,
+        consent_id: str,
+    ) -> dict[str, Any] | None:
+        """Lấy bản ghi đồng ý theo id, áp bộ lọc ngữ cảnh (P3).
+
+        Trả None nếu không tồn tại HOẶC ngoài phạm vi ctx — không lộ tồn tại
+        (404 ở HTTP).
+        """
+        ...
+
+    def revoke(self, ctx: SubjectContext, consent_id: str) -> bool:
+        """Rút một đồng ý (idempotent). Trả True nếu có bản ghi chuyển từ
+        `granted` sang `withdrawn`, False nếu không có gì để rút (không tồn
+        tại, ngoài phạm vi ctx, hoặc đã `withdrawn` từ trước) — cả hai trường
+        hợp False đều là 204 ở tầng HTTP theo contract (không phải lỗi)."""
+        ...
+
+    def list_for_student(
+        self,
+        ctx: SubjectContext,
+        student_id: str,
+    ) -> list[dict[str, Any]]:
+        """Toàn bộ bản ghi đồng ý của một học viên (đã kiểm quyền ở service),
+        mới nhất trước."""
+        ...
+
+    def get_active_consent(
+        self,
+        ctx: SubjectContext,
+        student_id: str,
+        purpose: str,
+    ) -> dict[str, Any] | None:
+        """Bản ghi đồng ý đang hiệu lực (`status='granted'`) cho một mục đích
+        cụ thể của học viên. Trả None nếu chưa từng đồng ý HOẶC đã rút —
+        dùng bởi `ConsentService.assert_purpose_granted` để chặn xử lý dữ
+        liệu cho mục đích đã rút đồng ý (Gherkin G3, QLKH-011)."""
+        ...
