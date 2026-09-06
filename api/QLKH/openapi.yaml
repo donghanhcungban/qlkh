@@ -1,440 +1,536 @@
 openapi: 3.1.0
 info:
   title: QLKH LMS API
-  version: 1.4.1
+  version: 1.3.0
   description: |
-    Contract-first API cho QLKH LMS. Uỷ quyền áp dụng ở tầng dữ liệu (ADR-004):
-    mọi truy vấn chạm PII được lọc theo SubjectContext (branch_id/quan hệ phụ
-    huynh-học viên/lớp phụ trách) trước khi trả kết quả; truy cập ngoài phạm vi
-    trả 404 (không lộ tồn tại), trừ trường hợp nêu rõ dùng 403.
-    Rate limit: 120 req/phút/tài khoản và 600 req/phút/IP (429 kèm Retry-After).
-    Lịch sử: 1.0.0 khởi tạo → 1.1.0 attendance/grade → 1.2.0 material →
-    1.3.0 consents (QLKH-011) → 1.4.0 erasure-requests (QLKH-012, REQ-011):
-    thêm response 422 cho `subject_student_id` thiếu/rỗng; làm rõ
-    `due_at = requested_at + 30 ngày` do SERVER tính (client không gửi được);
-    403 (không phải 404) khi người gọi không có quan hệ với học viên vì đây là
-    hành động ghi có chủ đích, không phải truy vấn đọc theo phạm vi ẩn danh.
-    Việc thực thi xóa (DB/log/lưu trữ lạnh) do job retention P4 đảm nhận bất
-    đồng bộ ngoài vòng đời request; không có endpoint đồng bộ để xóa ngay.
-    → 1.4.1 (QLKH-012, sửa lỗi contract-code lệch pha): createErasureRequest
-    trả 202 (không phải 201) — khớp hiện thực `erasure_http.py` và
-    `test_erasure_http.py` đã có sẵn: tài nguyên trả về mô tả một yêu cầu
-    ĐANG chờ xử lý (status=pending), việc xóa thật do job P4 thực thi sau;
-    bỏ header `Location` tương ứng (không phát ra trong response thật).
+    Contract-first. Nguồn sự thật duy nhất của API QLKH.
+    Uỷ quyền áp ở tầng dữ liệu (ADR-004): branch_id LUÔN lấy từ phiên, không bao giờ từ tham số client.
+    Rate limit mặc định: 120 req/phút/tài khoản, 600 req/phút/IP. Vượt → 429 kèm Retry-After.
+    Giới hạn body: 1 MiB; upload học liệu: 25 MiB.
+
+    Xác thực (QLKH-004, REQ-001, NFR-002, ADR-002): phiên máy chủ, cookie qlkh_session
+    HttpOnly + Secure + SameSite=Lax, vòng đời 12 giờ, thu hồi được tức thì.
+    Lỗi đăng nhập đồng nhất cho mọi nguyên nhân; khóa tạm 5 lần sai/15 phút theo tài khoản
+    và throttle backoff theo IP; MFA bắt buộc cho vai trò admin.
+
+    1.1.0 (minor, chỉ bổ sung mô tả/ví dụ — không đổi schema, không đổi mã trạng thái):
+    mô tả tường minh hành vi của /auth/login, /auth/logout, /auth/me kèm ví dụ Problem Details
+    cho 401 và 429 để client bắt lỗi theo `type` thay vì theo chuỗi `detail`.
+
+    1.2.0 (minor, QLKH-006, REQ-004): thêm schema `Enrollment` (enrolled_at readOnly —
+    server sinh, giá trị client gửi bị bỏ qua); `enrollStudent` trả body `Enrollment`;
+    thêm `DELETE /classes/{id}/enrollments/{studentId}` (operationId `unenrollStudent`,
+    idempotent — hủy ghi danh không tồn tại vẫn 204) để đóng phần "DELETE enrollment"
+    còn thiếu trong scope. Không đổi schema/mã trạng thái đã có — tương thích ngược.
+
+    1.3.0 (minor, QLKH-007, REQ-005): thêm schema `Attendance` (attendance_at readOnly —
+    server sinh bằng đồng hồ server tại thời điểm điểm danh, giá trị client gửi bị bỏ qua,
+    cùng nguyên tắc với `enrolled_at`); `listAttendance` giờ trả `{data, meta}` kiểu
+    `Attendance[]` thay vì `object` rỗng trước đây (làm rõ hình dạng, không phải breaking
+    change vì trước đó chỉ khai `type: object` không có `properties` ràng buộc, mọi client
+    tuân contract cũ vẫn đọc được trường mới); thêm response `404` cho cả `listAttendance`
+    và `bulkAttendance` để nhất quán với các endpoint theo lớp khác (ADR-004: lớp ngoài
+    phạm vi cơ sở không được lộ tồn tại). Không đổi mã trạng thái/schema đã có — tương
+    thích ngược với v1.2.0.
 servers:
   - url: https://api.qlkh.example.vn/v1
-paths:
-  /health:
-    get:
-      operationId: health
-      summary: Liveness/readiness probe
-      responses:
-        "200":
-          description: OK
-  /students:
-    get:
-      operationId: listStudents
-      summary: Danh sách học viên trong phạm vi phiên (branch/quan hệ phụ huynh)
-      parameters:
-        - name: limit
-          in: query
-          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
-        - name: cursor
-          in: query
-          schema: { type: string }
-      responses:
-        "200":
-          description: OK
-        "429":
-          description: Too Many Requests
-          headers:
-            Retry-After: { schema: { type: integer } }
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-    post:
-      operationId: createStudent
-      summary: Tạo học viên (branch_id server gán từ phiên, bỏ qua giá trị client gửi)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/StudentCreate" }
-      responses:
-        "201":
-          description: Created
-          headers:
-            Location: { schema: { type: string } }
-        "422":
-          description: Unprocessable Entity
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-  /students/{id}:
-    get:
-      operationId: getStudent
-      summary: Chi tiết học viên; ngoài phạm vi trả 404 (không lộ tồn tại)
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: OK
-        "404":
-          description: Not Found
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-    patch:
-      operationId: patchStudent
-      summary: Cập nhật học viên trong phạm vi branch của phiên
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/StudentPatch" }
-      responses:
-        "200":
-          description: OK
-        "404":
-          description: Not Found
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-  /students/{id}/grades:
-    get:
-      operationId: listStudentGrades
-      summary: Điểm của học viên (phụ huynh chỉ xem con mình)
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: OK
-        "404":
-          description: Not Found
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-  /students/{id}/consents:
-    get:
-      operationId: listStudentConsents
-      summary: Đồng ý xử lý dữ liệu của học viên, giới hạn theo chủ thể
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: OK
-        "404":
-          description: Not Found
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-    post:
-      operationId: createConsent
-      summary: Ghi nhận đồng ý — chỉ cho học viên có quan hệ với người gọi
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ConsentCreate" }
-      responses:
-        "201":
-          description: Created
-        "403":
-          description: Forbidden
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-        "422":
-          description: Unprocessable Entity (ví dụ gộp nhiều mục đích trong một request)
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-  /students/{id}/consents/{consent_id}:
-    delete:
-      operationId: revokeConsent
-      summary: Rút đồng ý; ngoài phạm vi trả 404
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-        - name: consent_id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "204":
-          description: No Content
-        "404":
-          description: Not Found
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-  /classes/{class_id}/attendance:
-    get:
-      operationId: listAttendance
-      summary: Điểm danh của lớp; giáo viên ngoài lớp phụ trách bị từ chối
-      parameters:
-        - name: class_id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: OK
-        "403":
-          description: Forbidden
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-    post:
-      operationId: bulkAttendance
-      summary: Điểm danh hàng loạt (một lần gọi, tối đa 200 mục, NFR-004)
-      parameters:
-        - name: class_id
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AttendanceBulkCreate" }
-      responses:
-        "200":
-          description: OK
-        "403":
-          description: Forbidden
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-  /classes/{class_id}/grades/{student_id}:
-    put:
-      operationId: upsertGrade
-      summary: Ghi/sửa điểm; giáo viên ngoài lớp phụ trách bị từ chối
-      parameters:
-        - name: class_id
-          in: path
-          required: true
-          schema: { type: string }
-        - name: student_id
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/GradeUpsert" }
-      responses:
-        "200":
-          description: OK
-        "403":
-          description: Forbidden
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-  /classes/{class_id}/grade-history:
-    get:
-      operationId: listGradeHistory
-      summary: Lịch sử sửa điểm; chỉ staff/teacher trong branch được xem
-      parameters:
-        - name: class_id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: OK
-        "403":
-          description: Forbidden
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-  /classes/{class_id}/materials:
-    post:
-      operationId: uploadMaterial
-      summary: Tải học liệu lên bucket riêng tư; chỉ giáo viên phụ trách lớp
-      parameters:
-        - name: class_id
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema: { $ref: "#/components/schemas/MaterialUpload" }
-      responses:
-        "201":
-          description: Created
-        "403":
-          description: Forbidden
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-  /materials/{id}/download:
-    get:
-      operationId: downloadMaterial
-      summary: Cấp URL ký (<=15 phút) sau khi kiểm quyền
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: OK
-        "403":
-          description: Forbidden
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-  /erasure-requests:
-    post:
-      operationId: createErasureRequest
-      summary: |
-        Tạo yêu cầu xóa dữ liệu (ND13). Chỉ tạo được cho học viên có quan hệ
-        với người gọi (phụ huynh của học viên, hoặc staff/admin trong branch).
-        `due_at = requested_at + 30 ngày` do SERVER tính; client không gửi
-        và không sửa được trường này. Việc xóa thật (DB, log, lưu trữ lạnh)
-        do job retention P4 thực thi bất đồng bộ trước `due_at`.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ErasureRequestCreate" }
-      responses:
-        "202":
-          description: |
-            Accepted — yêu cầu xóa đã được ghi nhận (status=pending); việc
-            xóa thật do job retention P4 thực thi bất đồng bộ trước `due_at`
-            (QLKH-012 v1.4.1, sửa từ 201 ở v1.4.0: 202 đúng ngữ nghĩa hơn vì
-            tài nguyên trả về mô tả một yêu cầu ĐANG chờ xử lý, không phải
-            kết quả đã hoàn tất; khớp hiện thực `erasure_http.py` và bộ test
-            `test_erasure_http.py::test_tao_thanh_cong_tra_202` đã có sẵn).
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErasureRequest" }
-        "403":
-          description: |
-            Forbidden — người gọi không có quan hệ với `subject_student_id`.
-            Dùng 403 (không phải 404) vì đây là hành động ghi có chủ đích của
-            người dùng đã xác thực, không phải truy vấn đọc cần ẩn tồn tại.
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-        "422":
-          description: |
-            Unprocessable Entity — `subject_student_id` thiếu hoặc rỗng
-            (QLKH-012, REQ-011).
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-        "429":
-          description: Too Many Requests
-          headers:
-            Retry-After: { schema: { type: integer } }
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
+security:
+  - sessionCookie: []
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: qlkh_session
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
   schemas:
     Problem:
       type: object
+      required: [type, title, status]
       properties:
-        type: { type: string, format: uri }
+        type: { type: string, description: "URI ổn định, vd https://qlkh/errors/forbidden" }
         title: { type: string }
         status: { type: integer }
-        detail: { type: string }
+        detail: { type: string, description: "Không chứa thông tin nội bộ" }
         instance: { type: string }
-        errors:
-          type: array
-          items:
-            type: object
-            properties:
-              field: { type: string }
-              message: { type: string }
-      required: [type, title, status]
+    PageMeta:
+      type: object
+      properties:
+        next_cursor: { type: [string, 'null'] }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        mfa_code: { type: [string, 'null'], description: "Bắt buộc với tài khoản quản trị" }
+    Me:
+      type: object
+      required: [user_id, role, branch_ids]
+      properties:
+        user_id: { type: string, format: uuid }
+        role: { type: string, enum: [parent, teacher, staff, admin] }
+        branch_ids: { type: array, items: { type: string, format: uuid } }
+    Student:
+      type: object
+      required: [id, full_name, branch_id]
+      properties:
+        id: { type: string, format: uuid }
+        full_name: { type: string }
+        date_of_birth: { type: string, format: date }
+        branch_id: { type: string, format: uuid, readOnly: true }
+        parent_phone_masked: { type: string, readOnly: true, examples: ["+84***123"] }
     StudentCreate:
       type: object
+      required: [full_name, date_of_birth]
       properties:
-        full_name: { type: string, minLength: 1 }
-        branch_id:
-          type: string
-          description: Bị bỏ qua nếu client gửi — server luôn lấy branch_id từ phiên.
-      required: [full_name]
+        full_name: { type: string }
+        date_of_birth: { type: string, format: date }
+        parent_phone: { type: string }
     StudentPatch:
       type: object
+      description: "Allowlist. role/branch_id/is_teacher bị bỏ qua và ghi audit."
+      additionalProperties: false
       properties:
-        full_name: { type: string, minLength: 1 }
-    ConsentCreate:
+        full_name: { type: string }
+        parent_phone: { type: string }
+    Class:
       type: object
+      required: [id, name, branch_id]
       properties:
-        purpose: { type: string, minLength: 1 }
-        document_version: { type: string, minLength: 1 }
-      required: [purpose, document_version]
-    AttendanceBulkCreate:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        branch_id: { type: string, format: uuid, readOnly: true }
+        teacher_id: { type: string, format: uuid }
+    Enrollment:
       type: object
+      description: "enrolled_at do server sinh; giá trị enrolled_at client gửi bị bỏ qua (QLKH-006)."
+      required: [id, class_id, student_id, enrolled_at, status]
+      properties:
+        id: { type: string, format: uuid }
+        class_id: { type: string, format: uuid }
+        student_id: { type: string, format: uuid }
+        enrolled_at: { type: string, format: date-time, readOnly: true }
+        status: { type: string, enum: [active, withdrawn], readOnly: true }
+    AttendanceBulk:
+      type: object
+      required: [entries]
+      description: "attendance_at do server sinh; giá trị client gửi bị bỏ qua."
       properties:
         entries:
           type: array
           maxItems: 200
           items:
             type: object
-            properties:
-              student_id: { type: string }
-              status: { type: string, enum: [present, absent, late, excused] }
             required: [student_id, status]
-      required: [entries]
+            properties:
+              student_id: { type: string, format: uuid }
+              status: { type: string, enum: [present, absent, late, excused] }
+    Attendance:
+      type: object
+      description: >-
+        attendance_at do server sinh bằng đồng hồ server tại thời điểm gọi
+        bulkAttendance; giá trị attendance_at client gửi (nếu có) bị bỏ qua
+        (QLKH-007).
+      required: [id, class_id, student_id, status, attendance_at]
+      properties:
+        id: { type: string, format: uuid }
+        class_id: { type: string, format: uuid }
+        student_id: { type: string, format: uuid }
+        status: { type: string, enum: [present, absent, late, excused] }
+        attendance_at: { type: string, format: date-time, readOnly: true }
+    Grade:
+      type: object
+      required: [id, student_id, class_id, score, published]
+      properties:
+        id: { type: string, format: uuid }
+        student_id: { type: string, format: uuid }
+        class_id: { type: string, format: uuid }
+        score: { type: number, minimum: 0, maximum: 10 }
+        published: { type: boolean }
     GradeUpsert:
       type: object
+      required: [student_id, score]
       properties:
-        score: { type: number }
+        student_id: { type: string, format: uuid }
+        score: { type: number, minimum: 0, maximum: 10 }
+        publish: { type: boolean, default: false }
+        reason: { type: string, description: "Bắt buộc khi sửa điểm đã công bố" }
+    GradeHistoryEntry:
+      type: object
+      required: [id, grade_id, actor_id, changed_at, reason]
+      properties:
+        id: { type: string, format: uuid }
+        grade_id: { type: string, format: uuid }
+        old_score: { type: [number, 'null'] }
+        new_score: { type: number }
+        actor_id: { type: string, format: uuid }
+        changed_at: { type: string, format: date-time }
         reason: { type: string }
-      required: [score]
-    MaterialUpload:
+    Material:
       type: object
+      required: [id, class_id, filename, mime_type, size_bytes]
       properties:
-        file: { type: string, format: binary }
-        title: { type: string }
-      required: [file, title]
-    ErasureRequestCreate:
+        id: { type: string, format: uuid }
+        class_id: { type: string, format: uuid }
+        filename: { type: string }
+        mime_type: { type: string, enum: [application/pdf, image/png, image/jpeg, application/vnd.openxmlformats-officedocument.presentationml.presentation] }
+        size_bytes: { type: integer, maximum: 26214400 }
+    Consent:
       type: object
+      required: [id, student_id, purpose, document_version, granted_at, status]
       properties:
-        subject_student_id:
-          type: string
-          minLength: 1
-          description: Học viên cần xóa dữ liệu; bắt buộc, không được rỗng (422 nếu thiếu/rỗng).
-      required: [subject_student_id]
+        id: { type: string, format: uuid }
+        student_id: { type: string, format: uuid }
+        purpose: { type: string, enum: [service_delivery, notification, photo_publication] }
+        document_version: { type: string }
+        granted_at: { type: string, format: date-time }
+        status: { type: string, enum: [granted, withdrawn] }
     ErasureRequest:
       type: object
-      properties:
-        id: { type: string }
-        subject_student_id: { type: string }
-        requested_at: { type: string, format: date-time }
-        due_at:
-          type: string
-          format: date-time
-          description: requested_at + 30 ngày, do server tính.
-        status: { type: string, enum: [pending, completed] }
       required: [id, subject_student_id, requested_at, due_at, status]
+      properties:
+        id: { type: string, format: uuid }
+        subject_student_id: { type: string, format: uuid }
+        requested_at: { type: string, format: date-time }
+        due_at: { type: string, format: date-time, description: "requested_at + 30 ngày" }
+        status: { type: string, enum: [pending, completed] }
+  responses:
+    Unauthorized:
+      description: Chưa xác thực
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' }, examples: { e: { value: { type: "https://qlkh/errors/unauthorized", title: "Unauthorized", status: 401 } } } } }
+    Forbidden:
+      description: Không đủ quyền
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' }, examples: { e: { value: { type: "https://qlkh/errors/forbidden", title: "Forbidden", status: 403 } } } } }
+    NotFound:
+      description: Không tồn tại hoặc ngoài phạm vi (không lộ tồn tại)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' }, examples: { e: { value: { type: "https://qlkh/errors/not-found", title: "Not Found", status: 404 } } } } }
+    Conflict:
+      description: Xung đột trạng thái
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unprocessable:
+      description: Dữ liệu không hợp lệ
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    UnsupportedMedia:
+      description: Kiểu tệp không được chấp nhận (magic bytes không khớp)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    TooManyRequests:
+      description: Vượt rate limit
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+paths:
+  /auth/login:
+    post:
+      operationId: login
+      security: []
+      summary: Đăng nhập; thông điệp lỗi đồng nhất cho sai mật khẩu và không tồn tại
+      description: |
+        Đếm số lần sai theo tài khoản (khóa 5 lần/15 phút) và throttle theo IP.
+        401 dùng chung một `type`/`detail` cho "sai mật khẩu" và "tài khoản không tồn tại".
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/LoginRequest' } } }
+      responses:
+        '204': { description: Thành công, đặt cookie qlkh_session HttpOnly SameSite=Lax Secure }
+        '401':
+          description: Sai thông tin đăng nhập (đồng nhất, không lộ tài khoản có tồn tại hay không)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                e: { value: { type: "https://qlkh/errors/unauthorized", title: "Unauthorized", status: 401, detail: "Email hoặc mật khẩu không đúng" } }
+        '429':
+          description: Vượt số lần thử cho phép
+          headers:
+            Retry-After: { schema: { type: integer } }
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                e: { value: { type: "https://qlkh/errors/too-many-requests", title: "Too Many Requests", status: 429, detail: "Thử lại sau" } }
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: Hủy phiên hiện tại
+      description: |
+        Idempotent: gọi lại với phiên đã hủy vẫn trả 204. Định danh phiên chỉ lấy từ cookie,
+        không nhận từ body/query. Phản hồi xóa cookie `qlkh_session`.
+      responses:
+        '204':
+          description: Đã hủy phiên; cookie qlkh_session bị xóa
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: "qlkh_session=; Max-Age=0; HttpOnly; Secure; SameSite=Lax; Path=/"
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/me:
+    get:
+      operationId: getMe
+      summary: Thông tin chủ phiên hiện tại
+      description: |
+        Mỗi request kiểm lại trạng thái hoạt động của chủ phiên: tài khoản bị vô hiệu hóa
+        → 401 ngay lập tức dù cookie còn hạn, đồng thời toàn bộ phiên của tài khoản đó bị
+        thu hồi (T-03). `branch_ids` lấy từ phiên; client không bao giờ gửi branch_id.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /students:
+    get:
+      operationId: listStudents
+      summary: Danh sách học viên trong phạm vi cơ sở của phiên
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Student' } }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+    post:
+      operationId: createStudent
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/StudentCreate' } } }
+      responses:
+        '201': { description: Đã tạo, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /students/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: getStudent
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: patchStudent
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/StudentPatch' } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Student' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /students/{id}/grades:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: listStudentGrades
+      summary: Phụ huynh chỉ xem được con mình; điểm chưa công bố không trả về
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Grade' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /students/{id}/consents:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: listStudentConsents
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Consent' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /classes:
+    get:
+      operationId: listClasses
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Class' } }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createClass
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Class' } } }
+      responses:
+        '201': { description: Đã tạo, content: { application/json: { schema: { $ref: '#/components/schemas/Class' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /classes/{id}/enrollments:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      operationId: enrollStudent
+      summary: Ghi danh học viên vào lớp; giáo viên chỉ ghi danh được lớp mình phụ trách
+      description: |
+        `enrolled_at` do server sinh (đồng hồ server) — trường này không nằm trong request body,
+        không có chỗ nào để client truyền và ghi đè (QLKH-006). Giáo viên không phụ trách lớp
+        `id` nhận 403. Ghi danh lại học viên đã ghi danh (còn active) nhận 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [student_id]
+              properties: { student_id: { type: string, format: uuid } }
+      responses:
+        '201': { description: Đã ghi danh, content: { application/json: { schema: { $ref: '#/components/schemas/Enrollment' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /classes/{id}/enrollments/{studentId}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: studentId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: unenrollStudent
+      summary: Hủy ghi danh; idempotent — gọi lại với ghi danh đã hủy hoặc không tồn tại vẫn 204
+      description: |
+        Giáo viên chỉ hủy ghi danh được lớp mình phụ trách (403 nếu không). Không lộ sự tồn
+        tại của ghi danh ngoài phạm vi cơ sở (404 theo ADR-004).
+      responses:
+        '204': { description: Đã hủy ghi danh (hoặc đã hủy từ trước) }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /classes/{id}/attendance:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: listAttendance
+      summary: Danh sách điểm danh của một lớp; giáo viên chỉ xem được lớp mình phụ trách
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Attendance' } }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: bulkAttendance
+      summary: Điểm danh hàng loạt; giáo viên chỉ thao tác lớp phụ trách
+      description: |
+        `attendance_at` do server sinh bằng đồng hồ server tại thời điểm gọi, áp dụng chung
+        cho cả lô — không có chỗ nào trong request body để client truyền và ghi đè giá trị
+        này (QLKH-007); giá trị attendance_at client cố gửi kèm (kể cả lùi ngày) bị bỏ qua.
+        Rate limit 120 req/phút/tài khoản, 600 req/phút/IP — vượt ngưỡng trả 429 kèm
+        Retry-After trước khi chạm tới dữ liệu.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AttendanceBulk' } } }
+      responses:
+        '201':
+          description: Đã ghi
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Attendance' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /classes/{id}/grades:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      operationId: upsertGrade
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/GradeUpsert' } } }
+      responses:
+        '201': { description: Đã ghi, content: { application/json: { schema: { $ref: '#/components/schemas/Grade' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable', description: "Thiếu reason khi sửa điểm đã công bố" }
+  /grades/{id}/history:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: listGradeHistory
+      summary: Lịch sử append-only
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/GradeHistoryEntry' } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /classes/{id}/materials:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      operationId: uploadMaterial
+      summary: Upload học liệu; kiểm magic bytes, không tin đuôi tệp và Content-Type
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties: { file: { type: string, format: binary } }
+      responses:
+        '201': { description: Đã tải lên, content: { application/json: { schema: { $ref: '#/components/schemas/Material' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '415': { $ref: '#/components/responses/UnsupportedMedia' }
+  /materials/{id}/download:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      operationId: downloadMaterial
+      summary: Kiểm quyền rồi chuyển hướng tới URL ký hiệu lực <= 15 phút
+      responses:
+        '302': { description: Redirect tới URL ký; Content-Disposition attachment }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /consents:
+    post:
+      operationId: createConsent
+      summary: Ghi nhận đồng ý của cha mẹ; mỗi mục đích một bản ghi riêng
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [student_id, purpose, document_version]
+              properties:
+                student_id: { type: string, format: uuid }
+                purpose: { type: string, enum: [service_delivery, notification, photo_publication] }
+                document_version: { type: string }
+      responses:
+        '201': { description: Đã ghi, content: { application/json: { schema: { $ref: '#/components/schemas/Consent' } } } }
+        '422': { $ref: '#/components/responses/Unprocessable', description: "Gộp nhiều mục đích trong một bản ghi" }
+  /consents/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    delete:
+      operationId: revokeConsent
+      summary: Rút lại đồng ý
+      responses:
+        '204': { description: Đã rút }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /erasure-requests:
+    post:
+      operationId: createErasureRequest
+      summary: Yêu cầu xóa dữ liệu; hoàn tất trong <= 30 ngày
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject_student_id]
+              properties: { subject_student_id: { type: string, format: uuid } }
+      responses:
+        '202': { description: Đã tiếp nhận, content: { application/json: { schema: { $ref: '#/components/schemas/ErasureRequest' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
