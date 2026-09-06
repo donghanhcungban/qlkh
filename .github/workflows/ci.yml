@@ -1,0 +1,187 @@
+name: ci
+
+# Cổng chất lượng QLKH-001 (NFR-003). Mọi job là required check, không có đường bỏ qua.
+# Action ghim theo commit SHA (không dùng tag di động) — T-12 chuỗi cung ứng.
+# Nhị phân tải rời phải qua tools/verify_download.py (SD-09).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install ruff==0.16.6 mypy==1.11.2
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy qlkh tools
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # SD-13: phụ thuộc runtime cài từ lockfile có hash; lệch hash hay thiếu hash là fail (T-12).
+      - run: pip install --require-hashes -r requirements.lock
+      - run: pip install pytest==8.3.3 pytest-cov==5.0.0 pyyaml==6.0.2
+      - run: pytest --cov=qlkh --cov=tools --cov-branch --cov-fail-under=80
+
+  fitness:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install import-linter==2.0
+      # Kiểm tối thiểu chạy offline; fail => "vi phạm hướng phụ thuộc"
+      - run: python -m tools.fitness qlkh
+      - run: lint-imports --config importlinter.ini
+
+  authz-gate:
+    # SD-01: QLKH-003 thêm test uỷ quyền → bỏ continue-on-error (RISK-3, T-01/T-02).
+    # authz-gate giờ là cổng chặn cứng: thiếu test uỷ quyền cho endpoint PII → fail build.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install pyyaml==6.0.2
+      - run: python tools/check_authz_tests.py api/QLKH/openapi.yaml tests/authz
+
+  p3-gate:
+    # ADR-004, REQ-009, T-01/T-02: mọi truy cập bảng PII phải đi qua SubjectContext.
+    # Kiểm bằng AST tĩnh (tools/p3_gate.py) — không cần chạy code.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: python -m tools.p3_gate qlkh
+
+  sast:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: pipx install semgrep==1.85.0
+      - run: semgrep --error --severity ERROR --config p/ci --config p/python .
+
+  sca:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install pip-audit==2.7.3
+      # Tiêu chí 2: phụ thuộc có lỗ hổng High/Critical => chặn merge
+      - run: pip-audit --strict --requirement requirements.lock --vulnerability-service osv
+
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: |
+          set -euo pipefail
+          url=https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+          curl -sSL -o gitleaks.tar.gz "$url"
+          python tools/verify_download.py gitleaks.tar.gz "$url" --checksums-url \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_checksums.txt
+          tar xzf gitleaks.tar.gz gitleaks
+          ./gitleaks detect --source=. --redact --no-banner --log-opts="--all"
+
+  iac:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pipx install checkov==3.2.0
+      - run: checkov -d ./infra --quiet --compact
+      - run: |
+          set -euo pipefail
+          url=https://github.com/open-policy-agent/conftest/releases/download/v0.56.0/conftest_0.56.0_Linux_x86_64.tar.gz
+          curl -sSL -o conftest.tar.gz "$url"
+          python tools/verify_download.py conftest.tar.gz "$url" --checksums-url \
+            https://github.com/open-policy-agent/conftest/releases/download/v0.56.0/checksums.txt
+          tar xzf conftest.tar.gz conftest
+          ./conftest verify --policy ./policy
+          ./conftest test ./infra --policy ./policy --all-namespaces
+
+  license:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: |
+          set -euo pipefail
+          url=https://github.com/anchore/syft/releases/download/v1.18.1/syft_1.18.1_linux_amd64.tar.gz
+          curl -sSL -o syft.tar.gz "$url"
+          python tools/verify_download.py syft.tar.gz "$url" --checksums-url \
+            https://github.com/anchore/syft/releases/download/v1.18.1/syft_1.18.1_checksums.txt
+          tar xzf syft.tar.gz syft
+          ./syft dir:. -o cyclonedx-json=sbom.cdx.json
+      # SD-04: gói không có license cũng bị chặn, không chỉ GPL/AGPL/SSPL/BUSL
+      - run: python tools/check_licenses.py sbom.cdx.json
+
+  sbom:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: |
+          set -euo pipefail
+          url=https://github.com/anchore/syft/releases/download/v1.18.1/syft_1.18.1_linux_amd64.tar.gz
+          curl -sSL -o syft.tar.gz "$url"
+          python tools/verify_download.py syft.tar.gz "$url" --checksums-url \
+            https://github.com/anchore/syft/releases/download/v1.18.1/syft_1.18.1_checksums.txt
+          tar xzf syft.tar.gz syft
+          ./syft dir:. -o cyclonedx-json=sbom.cdx.json
+      # Tiêu chí 3: artifact luôn kèm SBOM CycloneDX
+      - run: python tools/check_sbom.py sbom.cdx.json
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  image-pin:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Chưa có Dockerfile ở QLKH-001 (chưa có runtime); job chặn sẵn tag di động
+      # ngay khi Dockerfile đầu tiên xuất hiện.
+      - name: Base image phải ghim theo digest
+        run: |
+          shopt -s nullglob
+          files=(Dockerfile */Dockerfile)
+          if [ ${#files[@]} -eq 0 ]; then echo "chưa có Dockerfile — bỏ qua"; exit 0; fi
+          if grep -Hn '^FROM ' "${files[@]}" | grep -v '@sha256:'; then
+            echo "Base image chưa ghim digest" >&2
+            exit 1
+          fi

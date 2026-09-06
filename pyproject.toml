@@ -2,6 +2,19 @@
 name = "qlkh"
 version = "0.1.0"
 requires-python = ">=3.11"
+# QLKH-004 (REQ-001, NFR-001, ADR-002): băm mật khẩu argon2id. Ghim đúng phiên bản; hash nằm ở requirements.lock.
+dependencies = ["argon2-cffi==25.1.0"]
 
 [tool.ruff]
 line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true

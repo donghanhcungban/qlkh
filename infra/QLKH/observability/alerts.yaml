@@ -1,0 +1,185 @@
+# QLKH — Alert rules cho 5 endpoint chạm PII (CR-OPS-001, TCK-CR-OPS-001-01)
+#
+# Nguồn đối chiếu: api/QLKH/openapi.yaml v1.4.0 (5 endpoint PII trong CR-OPS-001):
+#   POST /auth/login, GET /auth/me, GET /students/{id},
+#   GET /students/{id}/consents, POST /erasure-requests.
+# threat-model v1.34: RISK-3 (IDOR/dò quét quan hệ chủ thể), RISK-9 (PII rời qua log/giám sát).
+# ADR-004: uỷ quyền tầng dữ liệu (P3) — mọi endpoint đọc PII phải áp bộ lọc theo ngữ cảnh chủ thể;
+#   403/404 bất thường ở /students/{id} và /students/{id}/consents là dấu hiệu dò quét IDOR.
+#
+# GIỚI HẠN CÔNG CỤ (đọc trước khi tin số liệu):
+#   Môi trường chạy ticket này KHÔNG có backend giám sát thật (Prometheus/Grafana/Alertmanager
+#   hay tương đương — DEF-03 residency VN chưa chốt nhà cung cấp, xem QLKH-013-b/QLKH-013-d).
+#   File này là cấu hình-như-code (nguồn của sự thật cho rule), CHƯA được `apply`/`import` vào
+#   bất kỳ hệ giám sát thật nào. Không có kết quả "rule đã fire" hay "đã test được" nào được bịa ra.
+#   Cách release-engineer đối chiếu thủ công khi có backend thật:
+#     1. Với mỗi rule dưới đây, tạo alerting rule tương ứng trên backend đã chọn (PromQL/LogQL/
+#        tương đương), giữ đúng: endpoint, expr/threshold, for, severity, owner, runbook.
+#     2. Chạy `promtool test rules` (hoặc công cụ tương đương của backend) trên rule đã import,
+#        xác nhận cú pháp hợp lệ và ngưỡng khớp file này.
+#     3. Đối chiếu 5/5 endpoint trong api-contract v1.4.0 có ít nhất 1 rule 4xx/5xx + 1 rule
+#        latency + (riêng /students/{id} và /students/{id}/consents) 1 rule 403/404 IDOR.
+#     4. Bắn thử alert (ví dụ tạm hạ ngưỡng hoặc dùng test data) trong staging, xác nhận noti tới
+#        đúng owner và link runbook mở được, rồi khôi phục ngưỡng thật.
+#   Cho tới khi mục QLKH-013-b/d đóng, rule ở đây chỉ có giá trị đặc tả (spec), không phải bằng
+#   chứng vận hành.
+
+version: 1
+service: qlkh-api
+notify_defaults:
+  owner_team: platform-oncall
+  channel: pagerduty:qlkh-platform  # placeholder — thay bằng kênh thật khi DEF-03 chốt
+
+groups:
+  - name: auth-login
+    endpoint: "POST /auth/login"
+    pii_reason: "thất bại đăng nhập lộ liệu tài khoản tồn tại hay không; endpoint là cửa ngõ PII"
+    rules:
+      - name: auth-login-5xx-rate-high
+        expr: "sum(rate(http_requests_total{route=\"/auth/login\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{route=\"/auth/login\"}[5m])) > 0.02"
+        for: 5m
+        severity: page
+        owner: platform-oncall
+        runbook: infra/QLKH/observability/runbooks/RB-AUTH-LOGIN-5XX.md
+        description: "Tỉ lệ lỗi 5xx trên /auth/login > 2% trong 5 phút — nghi sự cố backend/session store."
+      - name: auth-login-p95-latency-high
+        expr: "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route=\"/auth/login\"}[5m])) by (le)) > 1.0"
+        for: 10m
+        severity: ticket
+        owner: platform-oncall
+        runbook: infra/QLKH/observability/runbooks/RB-AUTH-LOGIN-LATENCY.md
+        description: "p95 latency /auth/login > 1.0s trong 10 phút (ngân sách NFR-004)."
+      - name: auth-login-401-spike-brute-force
+        expr: "sum(rate(http_requests_total{route=\"/auth/login\",status=\"401\"}[5m])) > 5 * avg_over_time(sum(rate(http_requests_total{route=\"/auth/login\",status=\"401\"}[5m]))[1d:5m])"
+        for: 5m
+        severity: page
+        owner: security-engineer
+        runbook: infra/QLKH/observability/runbooks/RB-AUTH-LOGIN-BRUTEFORCE.md
+        description: "Spike bất thường 401 trên /auth/login so với baseline 24h — nghi dò mật khẩu hàng loạt (RISK-3 liên quan)."
+
+  - name: auth-me
+    endpoint: "GET /auth/me"
+    pii_reason: "trả branch_ids và thông tin chủ phiên; lỗi thu hồi phiên sai sẽ lộ PII của người khác"
+    rules:
+      - name: auth-me-5xx-rate-high
+        expr: "sum(rate(http_requests_total{route=\"/auth/me\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{route=\"/auth/me\"}[5m])) > 0.02"
+        for: 5m
+        severity: page
+        owner: platform-oncall
+        runbook: infra/QLKH/observability/runbooks/RB-AUTH-ME-5XX.md
+        description: "Tỉ lệ lỗi 5xx trên /auth/me > 2% trong 5 phút."
+      - name: auth-me-p95-latency-high
+        expr: "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route=\"/auth/me\"}[5m])) by (le)) > 0.5"
+        for: 10m
+        severity: ticket
+        owner: platform-oncall
+        runbook: infra/QLKH/observability/runbooks/RB-AUTH-ME-LATENCY.md
+        description: "p95 latency /auth/me > 0.5s trong 10 phút — endpoint gọi mỗi trang tải, nhạy với hiệu năng."
+      - name: auth-me-401-spike-session-revocation-anomaly
+        expr: "sum(rate(http_requests_total{route=\"/auth/me\",status=\"401\"}[5m])) > 3 * avg_over_time(sum(rate(http_requests_total{route=\"/auth/me\",status=\"401\"}[5m]))[1d:5m])"
+        for: 10m
+        severity: ticket
+        owner: security-engineer
+        runbook: infra/QLKH/observability/runbooks/RB-AUTH-ME-401-SPIKE.md
+        description: "Spike 401 bất thường trên /auth/me so với baseline 24h — nghi thu hồi phiên sai hàng loạt (T-03) hoặc tấn công session."
+
+  - name: students-detail
+    endpoint: "GET /students/{id}"
+    pii_reason: "trả hồ sơ học viên (trẻ em); mục tiêu chính của RISK-3 IDOR"
+    rules:
+      - name: students-id-5xx-rate-high
+        expr: "sum(rate(http_requests_total{route=\"/students/{id}\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{route=\"/students/{id}\"}[5m])) > 0.02"
+        for: 5m
+        severity: page
+        owner: platform-oncall
+        runbook: infra/QLKH/observability/runbooks/RB-STUDENTS-ID-5XX.md
+        description: "Tỉ lệ lỗi 5xx trên /students/{id} > 2% trong 5 phút."
+      - name: students-id-p95-latency-high
+        expr: "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route=\"/students/{id}\"}[5m])) by (le)) > 1.0"
+        for: 10m
+        severity: ticket
+        owner: platform-oncall
+        runbook: infra/QLKH/observability/runbooks/RB-STUDENTS-ID-LATENCY.md
+        description: "p95 latency /students/{id} > 1.0s trong 10 phút."
+      - name: students-id-403-404-idor-scan
+        expr: "sum(rate(http_requests_total{route=\"/students/{id}\",status=~\"403|404\"}[5m])) by (account_id) > 20"
+        for: 5m
+        severity: page
+        owner: security-engineer
+        runbook: infra/QLKH/observability/runbooks/RB-STUDENTS-ID-IDOR.md
+        description: >
+          ADR-004: một tài khoản tạo > 20 request/5 phút bị 403/404 trên /students/{id} — dấu hiệu
+          dò quét ID học viên ngoài phạm vi ngữ cảnh (IDOR, RISK-3). Nhãn account_id, KHÔNG dùng
+          student_id/id để tránh cardinality PII (xem observability skill).
+
+  - name: students-consents
+    endpoint: "GET /students/{id}/consents"
+    pii_reason: "consent là dữ liệu tuân thủ ND13 nhạy cảm; cùng rủi ro IDOR như students/{id}"
+    rules:
+      - name: students-consents-5xx-rate-high
+        expr: "sum(rate(http_requests_total{route=\"/students/{id}/consents\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{route=\"/students/{id}/consents\"}[5m])) > 0.02"
+        for: 5m
+        severity: page
+        owner: platform-oncall
+        runbook: infra/QLKH/observability/runbooks/RB-STUDENTS-CONSENTS-5XX.md
+        description: "Tỉ lệ lỗi 5xx trên /students/{id}/consents > 2% trong 5 phút."
+      - name: students-consents-p95-latency-high
+        expr: "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route=\"/students/{id}/consents\"}[5m])) by (le)) > 1.0"
+        for: 10m
+        severity: ticket
+        owner: platform-oncall
+        runbook: infra/QLKH/observability/runbooks/RB-STUDENTS-CONSENTS-LATENCY.md
+        description: "p95 latency /students/{id}/consents > 1.0s trong 10 phút."
+      - name: students-consents-403-404-idor-scan
+        expr: "sum(rate(http_requests_total{route=\"/students/{id}/consents\",status=~\"403|404\"}[5m])) by (account_id) > 20"
+        for: 5m
+        severity: page
+        owner: security-engineer
+        runbook: infra/QLKH/observability/runbooks/RB-STUDENTS-CONSENTS-IDOR.md
+        description: >
+          ADR-004: một tài khoản tạo > 20 request/5 phút bị 403/404 trên /students/{id}/consents —
+          dấu hiệu dò quét quan hệ chủ thể lên dữ liệu consent (IDOR, RISK-3/RISK-9).
+
+  - name: erasure-requests
+    endpoint: "POST /erasure-requests"
+    pii_reason: "yêu cầu xóa dữ liệu chủ thể; lỗi ở đây ảnh hưởng nghĩa vụ ND13 30 ngày (RISK-8)"
+    rules:
+      - name: erasure-requests-5xx-rate-high
+        expr: "sum(rate(http_requests_total{route=\"/erasure-requests\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{route=\"/erasure-requests\"}[5m])) > 0.02"
+        for: 5m
+        severity: page
+        owner: platform-oncall
+        runbook: infra/QLKH/observability/runbooks/RB-ERASURE-5XX.md
+        description: "Tỉ lệ lỗi 5xx trên POST /erasure-requests > 2% trong 5 phút — có thể chặn job xóa đúng hạn (RISK-8)."
+      - name: erasure-requests-p95-latency-high
+        expr: "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route=\"/erasure-requests\"}[5m])) by (le)) > 1.0"
+        for: 10m
+        severity: ticket
+        owner: platform-oncall
+        runbook: infra/QLKH/observability/runbooks/RB-ERASURE-LATENCY.md
+        description: "p95 latency POST /erasure-requests > 1.0s trong 10 phút."
+      - name: erasure-requests-volume-spike-anomalous
+        expr: "sum(rate(http_requests_total{route=\"/erasure-requests\",status=\"202\"}[15m])) > 5 * avg_over_time(sum(rate(http_requests_total{route=\"/erasure-requests\",status=\"202\"}[15m]))[7d:1h])"
+        for: 15m
+        severity: ticket
+        owner: security-engineer
+        runbook: infra/QLKH/observability/runbooks/RB-ERASURE-VOLUME-SPIKE.md
+        description: "Spike bất thường số yêu cầu xóa được chấp nhận (202) so với baseline 7 ngày — nghi lạm dụng hoặc lỗi client hàng loạt; cũng theo dõi tỉ lệ erasure_sla_breach từ audit log (threat-model mục 25)."
+      - name: erasure-requests-403-relationship-denied-spike
+        expr: "sum(rate(http_requests_total{route=\"/erasure-requests\",status=\"403\"}[5m])) by (account_id) > 10"
+        for: 5m
+        severity: page
+        owner: security-engineer
+        runbook: infra/QLKH/observability/runbooks/RB-ERASURE-403-SPIKE.md
+        description: >
+          Một tài khoản tạo > 10 request/5 phút bị 403 (không có quan hệ chủ thể, ErasureNotAuthorized)
+          trên POST /erasure-requests — dấu hiệu dò quét subject_student_id ngoài phạm vi (IDOR, RISK-3).
+
+# Bảng đối chiếu 5/5 endpoint PII (api-contract v1.4.0, CR-OPS-001) — không endpoint nào thiếu alert:
+# | # | Endpoint                        | 4xx/5xx | Latency p95 | IDOR 403/404 riêng | Volume spike |
+# |---|----------------------------------|---------|-------------|---------------------|--------------|
+# | 1 | POST /auth/login                 | có      | có          | -- (401 spike thay) | có (401 brute-force) |
+# | 2 | GET /auth/me                     | có      | có          | -- (401 spike thay) | có (401 spike) |
+# | 3 | GET /students/{id}               | có      | có          | có                  | -- |
+# | 4 | GET /students/{id}/consents       | có      | có          | có                  | -- |
+# | 5 | POST /erasure-requests           | có      | có          | có (403 relationship) | có (202 volume) |
