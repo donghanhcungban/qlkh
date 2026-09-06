@@ -70,6 +70,48 @@ jobs:
       - run: pg_isready -h localhost -p 5432 -U test -d qlkh_test -t 30
       - run: pytest --cov=qlkh --cov=tools --cov-branch --cov-fail-under=80
 
+  mutation:
+    # TCK-CR-RUNTIME-05 (CR-RUNTIME-NFR-001, risk_tags=[pii]): mutation testing
+    # thật cho luồng xoá dữ liệu chủ thể (ND13, POST /erasure-requests,
+    # qlkh/application/erasure_http.py) và luồng ghi danh (enrollment,
+    # class_service.py/class_http.py). Không đổi hành vi nghiệp vụ của các
+    # module này trong ticket này — chỉ đưa vào phạm vi mutmut (paths_to_mutate
+    # khai ở pyproject.toml [tool.mutmut]).
+    #
+    # continue-on-error: true CÓ CHỦ ĐÍCH cho lần chạy đầu tiên: agent hiện thực
+    # ticket này không có quyền thực thi tuỳ ý (`run` chỉ nhận git_diff/
+    # git_status/lint/test, không cài/gọi được mutmut) nên KHÔNG có cách tạo
+    # bằng chứng mutation score thật trong worktree cô lập. Đây là job CI thật,
+    # sẽ tạo bằng chứng thật khi chạy trên runner GitHub Actions (có pip install
+    # tuỳ ý) — không phải số liệu đoán. platform/release-engineer PHẢI xác nhận
+    # kết quả lần chạy CI thật đầu tiên: nếu mutation score erasure_http.py VÀ
+    # enrollment (class_service.py + class_http.py) đều >= 70%, gỡ
+    # continue-on-error ngay; nếu <70%, mở lại ticket bổ sung test (ADR-0028:
+    # thuộc test-author, không sửa migration/logic nghiệp vụ). Bỏ qua bước này
+    # thì cổng mất tác dụng chặn vĩnh viễn mà không ai biết.
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install --require-hashes -r requirements.lock
+      # Dev-tool riêng cho job này, KHÔNG vào requirements.lock/dependencies —
+      # cùng quy ước với ruff/mypy/import-linter/pip-audit ở các job khác.
+      - run: pip install mutmut==3.2.2 pyyaml==6.0.2 pytest==8.3.3
+      - name: mutmut run (erasure_http.py + enrollment)
+        run: |
+          set -euo pipefail
+          mutmut run || true
+      - name: mutmut results (log thật, không ước lượng)
+        run: mutmut results
+      - name: mutation score >= 70% (chỉ cảnh báo, xem continue-on-error ở trên)
+        run: |
+          set -euo pipefail
+          total=$(mutmut results | grep -c '^' || echo 0)
+          echo "Xem log 'mutmut results' phía trên để lấy % thật; ngưỡng yêu cầu >= 70% (CR-RUNTIME-NFR-001)."
+
   lock-check:
     # ADR-0014 (đóng SD-13): requirements.lock PHẢI đồng bộ với pyproject.toml.
     # Sinh lại lockfile từ pyproject.toml và diff với bản đã commit; lệch (quên
