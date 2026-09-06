@@ -7,63 +7,19 @@ test gọi thẳng `ClassHttpHandlers` với request đã chuẩn hoá.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 import pytest
 
 from qlkh.application.class_http import ClassHttpHandlers
 from qlkh.application.class_service import ClassService
-from qlkh.application.repository_ports import EnrollmentConflict
 from qlkh.domain.subject_context import SubjectContext
+from qlkh.infrastructure.class_memory import InMemoryClassRepository as FakeRepo
 
 BRANCH_A = "aaaaaaaa-0000-0000-0000-000000000001"
 CLASS_1 = "cccccccc-0000-0000-0000-000000000100"
 CLASS_2 = "dddddddd-0000-0000-0000-000000000200"
 STUDENT_A = "aaaaaaaa-0000-0000-0000-000000000010"
 FIXED_NOW = datetime(2026, 9, 5, 12, 0, 0, tzinfo=UTC)
-
-
-class FakeRepo:
-    def __init__(self, classes: dict[str, dict[str, Any]]) -> None:
-        self._classes = classes
-        self._enrollments: dict[tuple[str, str], dict[str, Any]] = {}
-
-    def list_for_branch(self, ctx, *, cursor=None, limit=50):
-        visible = [c for c in self._classes.values() if ctx.can_access_branch(c["branch_id"])]
-        return visible[:limit], None
-
-    def get_by_id(self, ctx, class_id):
-        record = self._classes.get(class_id)
-        if record is None or not ctx.can_access_branch(record["branch_id"]):
-            return None
-        return record
-
-    def create(self, ctx, *, name, teacher_id=None):
-        record = {"id": "new-1", "name": name, "teacher_id": teacher_id, "branch_id": BRANCH_A}
-        self._classes["new-1"] = record
-        return record
-
-    def enroll(self, ctx, class_id, student_id, *, enrolled_at):
-        key = (class_id, student_id)
-        if self._enrollments.get(key, {}).get("status") == "active":
-            raise EnrollmentConflict("dup")
-        record = {
-            "id": f"enr-{class_id}-{student_id}",
-            "class_id": class_id,
-            "student_id": student_id,
-            "enrolled_at": enrolled_at.isoformat(),
-            "status": "active",
-        }
-        self._enrollments[key] = record
-        return record
-
-    def unenroll(self, ctx, class_id, student_id):
-        key = (class_id, student_id)
-        existing = self._enrollments.get(key)
-        if existing is None or existing["status"] != "active":
-            return False
-        existing["status"] = "withdrawn"
-        return True
 
 
 class RecordingAudit:
