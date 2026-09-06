@@ -28,6 +28,15 @@
 #                       nhất (ghi TRƯỚC khi ghi đè `current`) — rollback.sh
 #                       đọc file này.
 #
+# QUAN TRỌNG: var/ nằm BÊN TRONG working tree của $STAGING_DIR nhưng KHÔNG
+# được git track/ignore trong repo nguồn. `git clean -fd` mặc định sẽ coi
+# toàn bộ var/ là "untracked" và XOÁ SẠCH (pidfile, current, previous, log) —
+# phá vỡ idempotency và rollback ngay từ lần deploy thứ hai. Vì vậy:
+#   1. fetch_ref() PHẢI loại trừ var/ khỏi git clean (`-e var`).
+#   2. Sau khi checkout/clean, PHẢI mkdir -p lại VAR_DIR phòng trường hợp nó
+#      chưa tồn tại (checkout lần đầu) trước khi bất kỳ ai đọc/ghi file
+#      trạng thái bên trong.
+#
 # Idempotent: chạy lại với cùng ref không lỗi, không nhân đôi tiến trình —
 # tiến trình cũ luôn bị dừng qua pidfile trước khi tiến trình mới được khởi
 # động, bất kể ref có đổi hay không.
@@ -119,7 +128,15 @@ fetch_ref() {
     git -C "$STAGING_DIR" fetch --tags --force origin
     git -C "$STAGING_DIR" checkout --force --detach "$REF"
   fi
-  git -C "$STAGING_DIR" clean -fd
+  # KHÔNG được clean var/: nó không nằm trong git nhưng nằm trong working
+  # tree — `git clean -fd` không loại trừ sẽ xoá pidfile/current/previous/log
+  # (xem cảnh báo ở đầu file). "-e var" loại trừ đường dẫn var/ (và mọi thứ
+  # bên trong nó) khỏi việc dọn untracked files.
+  git -C "$STAGING_DIR" clean -fd -e var
+  # Phòng trường hợp checkout lần đầu (VAR_DIR chưa từng được tạo bên trong
+  # STAGING_DIR) — tái tạo ngay sau clean, trước khi main() đọc/ghi bất kỳ
+  # file trạng thái nào.
+  mkdir -p "$VAR_DIR"
 }
 
 wait_healthz() {
