@@ -30,6 +30,26 @@ jobs:
 
   test:
     runs-on: ubuntu-24.04
+    # SD-25: service Postgres thật cho test tích hợp schema (tests/schema/test_postgres_integration.py).
+    # Version 16 khớp phiên bản dự kiến staging/production; đổi tag nếu platform xác nhận version khác.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: qlkh_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # SD-25: DSN của service postgres ở trên; test_postgres_integration.py auto-skip nếu
+      # biến này không đặt — ở đây LUÔN đặt nên test chạy thật (không skip) trong CI.
+      QLKH_TEST_PG_DSN: postgresql://test:test@localhost:5432/qlkh_test
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
@@ -38,6 +58,15 @@ jobs:
       # SD-13: phụ thuộc runtime cài từ lockfile có hash; lệch hash hay thiếu hash là fail (T-12).
       - run: pip install --require-hashes -r requirements.lock
       - run: pip install pytest==8.3.3 pytest-cov==5.0.0 pyyaml==6.0.2
+      # SD-25: test_postgres_integration.py gọi psql qua subprocess; runner ubuntu-24.04 có sẵn
+      # postgresql-client, nhưng cài tường minh để không phụ thuộc image mặc định của runner.
+      - run: |
+          set -euo pipefail
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y --no-install-recommends postgresql-client
+          fi
+      - run: pg_isready -h localhost -p 5432 -U test -d qlkh_test -t 30
       - run: pytest --cov=qlkh --cov=tools --cov-branch --cov-fail-under=80
 
   fitness:
