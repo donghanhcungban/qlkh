@@ -91,6 +91,24 @@ jobs:
             exit 1
           fi
 
+  smoke:
+    # ADR-0015 / ADR-0031 / TCK-CR-RUNTIME-01: đóng gap evidence.run/smoke
+    # unverified lặp lại 11 lần liên tiếp (REL-027..038, xem
+    # docs/QLKH/changelog/CHANGELOG.md). Đọc runtime.yaml (nguồn sự thật DUY
+    # NHẤT cho lệnh khởi động/cổng/health) qua tools/run_smoke.sh: khởi động
+    # devserver thật, chờ /healthz xanh, chạy infra/staging/wsl/smoke.sh
+    # (4 bước HTTP thật, tài khoản seed) — bằng chứng thật, không phải khai.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # Cùng cơ chế cài dependency với job `test` và infra/staging/wsl/deploy.sh (ADR-0014).
+      - run: pip install --require-hashes -r requirements.lock
+      - run: chmod +x tools/run_smoke.sh infra/staging/wsl/smoke.sh
+      - run: tools/run_smoke.sh
+
   fitness:
     runs-on: ubuntu-24.04
     steps:
