@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: QLKH LMS API
-  version: 1.3.0
+  version: 1.4.0
   description: |
     Contract-first. Nguồn sự thật duy nhất của API QLKH.
     Uỷ quyền áp ở tầng dữ liệu (ADR-004): branch_id LUÔN lấy từ phiên, không bao giờ từ tham số client.
@@ -32,6 +32,18 @@ info:
     và `bulkAttendance` để nhất quán với các endpoint theo lớp khác (ADR-004: lớp ngoài
     phạm vi cơ sở không được lộ tồn tại). Không đổi mã trạng thái/schema đã có — tương
     thích ngược với v1.2.0.
+
+    1.4.0 (minor, QLKH-012, REQ-011): thêm `POST /erasure-requests` (operationId
+    `createErasureRequest`) — yêu cầu xóa dữ liệu chủ thể (ND13); chỉ tạo được cho học
+    viên có quan hệ với người gọi (phụ huynh của học viên, hoặc staff/admin trong
+    branch), ngoài phạm vi trả `403` (hành động ghi có chủ đích, không phải truy vấn
+    đọc cần ẩn tồn tại). `due_at = requested_at + 30 ngày` do SERVER tính; client
+    không gửi và không sửa được trường này. Trả `202 Accepted` (không phải `201`) vì
+    tài nguyên trả về mô tả một yêu cầu ĐANG chờ xử lý (`status=pending`) — việc xóa
+    thật (DB, log, lưu trữ lạnh) do job retention P4 thực thi bất đồng bộ trước
+    `due_at`, ngoài vòng đời request; không có endpoint đồng bộ để xóa ngay. `422`
+    khi `subject_student_id` thiếu hoặc rỗng. Thêm schema `ErasureRequest`. Không đổi
+    schema/mã trạng thái đã có — tương thích ngược với v1.3.0.
 servers:
   - url: https://api.qlkh.example.vn/v1
 security:
@@ -523,6 +535,14 @@ paths:
     post:
       operationId: createErasureRequest
       summary: Yêu cầu xóa dữ liệu; hoàn tất trong <= 30 ngày
+      description: |
+        Chỉ tạo được cho học viên có quan hệ với người gọi (phụ huynh của học viên,
+        hoặc staff/admin trong branch); ngoài phạm vi trả 403 (hành động ghi có chủ
+        đích, không phải truy vấn đọc cần ẩn tồn tại — ADR-004 không áp dụng ở đây).
+        `due_at = requested_at + 30 ngày` do SERVER tính; client không gửi và không
+        sửa được trường này. Việc xóa thật (DB, log, lưu trữ lạnh) do job retention P4
+        (QLKH-012, REQ-011) thực thi bất đồng bộ trước `due_at`; không có endpoint
+        đồng bộ để xóa ngay.
       requestBody:
         required: true
         content:
@@ -532,5 +552,10 @@ paths:
               required: [subject_student_id]
               properties: { subject_student_id: { type: string, format: uuid } }
       responses:
-        '202': { description: Đã tiếp nhận, content: { application/json: { schema: { $ref: '#/components/schemas/ErasureRequest' } } } }
+        '202':
+          description: |
+            Đã tiếp nhận — yêu cầu ở trạng thái `pending`; việc xóa thật do job
+            retention P4 thực thi bất đồng bộ trước `due_at`.
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErasureRequest' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable', description: "subject_student_id thiếu hoặc rỗng" }
