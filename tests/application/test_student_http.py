@@ -8,54 +8,16 @@ những gì một adapter framework tương lai sẽ truyền vào.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import pytest
 
 from qlkh.application.student_http import JsonAuditSink, StudentHttpHandlers
 from qlkh.application.student_service import StudentService
 from qlkh.domain.subject_context import SubjectContext
+from qlkh.infrastructure.student_memory import InMemoryStudentRepository as FakeRepo
 
 BRANCH_Q1 = "11111111-0000-0000-0000-000000000001"
 STUDENT_A = "aaaaaaaa-0000-0000-0000-000000000010"
-
-
-class FakeRepo:
-    def __init__(self, students: dict[str, dict[str, Any]]) -> None:
-        self._students = students
-
-    def get_by_id(self, ctx, student_id):
-        record = self._students.get(student_id)
-        if record is None or not ctx.can_access_student(student_id, record["branch_id"]):
-            return None
-        return record
-
-    def list_for_branch(self, ctx, *, cursor=None, limit=50):
-        visible = [s for s in self._students.values() if ctx.can_access_branch(s["branch_id"])]
-        visible.sort(key=lambda s: s["id"])
-        return visible[:limit], None
-
-    def create(self, ctx, *, full_name, date_of_birth, parent_phone=None):
-        new_id = "new-1"
-        record = {
-            "id": new_id,
-            "full_name": full_name,
-            "date_of_birth": date_of_birth,
-            "parent_phone": parent_phone,
-            "branch_id": ctx.allowed_branch_ids[0],
-        }
-        self._students[new_id] = record
-        return record
-
-    def patch(self, ctx, student_id, *, full_name=None, parent_phone=None):
-        record = self._students.get(student_id)
-        if record is None or not ctx.can_access_student(student_id, record["branch_id"]):
-            return None
-        if full_name is not None:
-            record["full_name"] = full_name
-        if parent_phone is not None:
-            record["parent_phone"] = parent_phone
-        return record
 
 
 class RecordingAudit:
