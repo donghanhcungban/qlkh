@@ -55,7 +55,8 @@ jobs:
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      # SD-13: phụ thuộc runtime cài từ lockfile có hash; lệch hash hay thiếu hash là fail (T-12).
+      # ADR-0014 (đóng SD-13): requirements.lock là nguồn khoá phiên bản chính thức
+      # duy nhất; cài ở chế độ frozen + --require-hashes, lệch hash hay thiếu hash là fail (T-12).
       - run: pip install --require-hashes -r requirements.lock
       - run: pip install pytest==8.3.3 pytest-cov==5.0.0 pyyaml==6.0.2
       # SD-25: test_postgres_integration.py gọi psql qua subprocess; runner ubuntu-24.04 có sẵn
@@ -68,6 +69,27 @@ jobs:
           fi
       - run: pg_isready -h localhost -p 5432 -U test -d qlkh_test -t 30
       - run: pytest --cov=qlkh --cov=tools --cov-branch --cov-fail-under=80
+
+  lock-check:
+    # ADR-0014 (đóng SD-13): requirements.lock PHẢI đồng bộ với pyproject.toml.
+    # Sinh lại lockfile từ pyproject.toml và diff với bản đã commit; lệch (quên
+    # chạy lại `uv pip compile` sau khi đổi dependency) => fail rõ ràng, thay vì
+    # để job `test` âm thầm cài đúng phiên bản cũ trong khi pyproject.toml đã đổi.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install uv==0.4.29
+      - run: uv pip compile pyproject.toml --generate-hashes --python-version "${{ env.PYTHON_VERSION }}" -o requirements.lock.generated
+      - name: requirements.lock phải khớp pyproject.toml
+        run: |
+          set -euo pipefail
+          if ! diff -u requirements.lock requirements.lock.generated; then
+            echo "::error::requirements.lock lệch so với pyproject.toml (ADR-0014). Chạy lại: uv pip compile pyproject.toml --generate-hashes --python-version ${{ env.PYTHON_VERSION }} -o requirements.lock" >&2
+            exit 1
+          fi
 
   fitness:
     runs-on: ubuntu-24.04

@@ -6,6 +6,18 @@
 # bị loại" trong ADR-0013) — chỉ nohup + pidfile, phù hợp một môi trường thử
 # nghiệm một người dùng trên máy 4CPU/8GB/20GB.
 #
+# Khoá phiên bản dependency (ADR-0014, đóng nợ SD-13): `requirements.lock`
+# (sinh bằng `uv pip compile pyproject.toml --generate-hashes`, commit vào
+# repo) là NGUỒN KHOÁ PHIÊN BẢN CHÍNH THỨC DUY NHẤT của dự án — xem
+# ADR-0014 tại architecture/QLKH/adr/ADR-0014-debt-closure-sd13-def01-def03.md.
+# Script này CỐ Ý KHÔNG dùng `uv sync --frozen` (yêu cầu `uv.lock`, file
+# không tồn tại và không được commit trong repo này): ADR-0014 loại phương án
+# đó vì đã từng gây lỗi thật trên WSL (uv v0.17.4, xem
+# infra/staging/wsl/deploy-rollback-status.md) do repo không đồng bộ
+# `uv.lock`. Thay vào đó, dependency được cài vào một virtualenv cục bộ bằng
+# `pip install --require-hashes -r requirements.lock` — CÙNG cơ chế job
+# `test` trong .github/workflows/ci.yml dùng, không lệch giữa CI và staging.
+#
 # Cách dùng:
 #   infra/staging/wsl/deploy.sh <git-ref>
 #
@@ -28,11 +40,17 @@
 #                       nhất (ghi TRƯỚC khi ghi đè `current`) — rollback.sh
 #                       đọc file này.
 #
-# QUAN TRỌNG: var/ nằm BÊN TRONG working tree của $STAGING_DIR nhưng KHÔNG
-# được git track/ignore trong repo nguồn. `git clean -fd` mặc định sẽ coi
-# toàn bộ var/ là "untracked" và XOÁ SẠCH (pidfile, current, previous, log) —
-# phá vỡ idempotency và rollback ngay từ lần deploy thứ hai. Vì vậy:
-#   1. fetch_ref() PHẢI loại trừ var/ khỏi git clean (`-e var`).
+# Virtualenv Python persistent tại $QLKH_STAGING_DIR/.venv (không phải trạng
+# thái deploy — giữ lại giữa các lần deploy để đỡ cài lại dependency mỗi lần,
+# nhưng KHÔNG được coi là nguồn khoá phiên bản: nội dung của nó luôn được
+# đồng bộ lại với `requirements.lock` của sha đang deploy ở mỗi lần chạy).
+#
+# QUAN TRỌNG: var/ và .venv/ nằm BÊN TRONG working tree của $STAGING_DIR
+# nhưng KHÔNG được git track/ignore trong repo nguồn. `git clean -fd` mặc
+# định sẽ coi cả hai là "untracked" và XOÁ SẠCH (pidfile, current, previous,
+# log, virtualenv) — phá vỡ idempotency và rollback ngay từ lần deploy thứ
+# hai. Vì vậy:
+#   1. fetch_ref() PHẢI loại trừ var/ và .venv/ khỏi git clean (`-e var -e .venv`).
 #   2. Sau khi checkout/clean, PHẢI mkdir -p lại VAR_DIR phòng trường hợp nó
 #      chưa tồn tại (checkout lần đầu) trước khi bất kỳ ai đọc/ghi file
 #      trạng thái bên trong.
@@ -47,6 +65,7 @@ REF="${1:?Cách dùng: deploy.sh <git-ref>}"
 
 STAGING_DIR="${QLKH_STAGING_DIR:-$HOME/qlkh-staging}"
 VAR_DIR="$STAGING_DIR/var"
+VENV_DIR="$STAGING_DIR/.venv"
 PID_FILE="$VAR_DIR/devserver.pid"
 LOG_FILE="$VAR_DIR/devserver.log"
 CURRENT_FILE="$VAR_DIR/current"
@@ -128,15 +147,31 @@ fetch_ref() {
     git -C "$STAGING_DIR" fetch --tags --force origin
     git -C "$STAGING_DIR" checkout --force --detach "$REF"
   fi
-  # KHÔNG được clean var/: nó không nằm trong git nhưng nằm trong working
-  # tree — `git clean -fd` không loại trừ sẽ xoá pidfile/current/previous/log
-  # (xem cảnh báo ở đầu file). "-e var" loại trừ đường dẫn var/ (và mọi thứ
-  # bên trong nó) khỏi việc dọn untracked files.
-  git -C "$STAGING_DIR" clean -fd -e var
+  # KHÔNG được clean var/ hay .venv/: cả hai không nằm trong git nhưng nằm
+  # trong working tree — `git clean -fd` không loại trừ sẽ xoá
+  # pidfile/current/previous/log VÀ virtualenv (xem cảnh báo ở đầu file).
+  # "-e var -e .venv" loại trừ cả hai đường dẫn (và mọi thứ bên trong) khỏi
+  # việc dọn untracked files.
+  git -C "$STAGING_DIR" clean -fd -e var -e .venv
   # Phòng trường hợp checkout lần đầu (VAR_DIR chưa từng được tạo bên trong
   # STAGING_DIR) — tái tạo ngay sau clean, trước khi main() đọc/ghi bất kỳ
   # file trạng thái nào.
   mkdir -p "$VAR_DIR"
+}
+
+setup_venv() {
+  # ADR-0014 (đóng SD-13): requirements.lock là nguồn khoá phiên bản chính
+  # thức duy nhất; KHÔNG dùng `uv sync --frozen` (cần uv.lock, không tồn tại
+  # trong repo). Cài dependency bằng đúng cơ chế job `test` của CI dùng
+  # (pip install --require-hashes -r requirements.lock) để staging và CI
+  # không lệch nhau.
+  if [ ! -d "$VENV_DIR" ]; then
+    log "tạo virtualenv tại $VENV_DIR"
+    python3 -m venv "$VENV_DIR"
+  fi
+  log "cài dependency từ requirements.lock (--require-hashes)"
+  "$VENV_DIR/bin/pip" install --quiet --upgrade pip
+  "$VENV_DIR/bin/pip" install --quiet --require-hashes -r "$STAGING_DIR/requirements.lock"
 }
 
 wait_healthz() {
@@ -165,7 +200,7 @@ main() {
   new_sha="$(git -C "$STAGING_DIR" rev-parse HEAD)"
   log "sha mục tiêu: $new_sha"
 
-  (cd "$STAGING_DIR" && uv sync --frozen)
+  setup_venv
 
   # Ghi sha hiện tại (của lần deploy trước) vào previous TRƯỚC KHI ghi đè —
   # chỉ khi đã từng deploy thành công (current tồn tại).
@@ -179,7 +214,7 @@ main() {
   export QLKH_GIT_SHA="$new_sha"
   (
     cd "$STAGING_DIR"
-    nohup uv run python -m qlkh.devserver --host "$HOST" --port "$PORT" >>"$LOG_FILE" 2>&1 &
+    nohup "$VENV_DIR/bin/python" -m qlkh.devserver --host "$HOST" --port "$PORT" >>"$LOG_FILE" 2>&1 &
     echo $! >"$PID_FILE"
   )
   log "devserver khởi động, pid=$(cat "$PID_FILE") log=$LOG_FILE"
