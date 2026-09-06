@@ -105,6 +105,34 @@ infra/staging/wsl/smoke.sh
   seed qua tham số dòng lệnh, chỉ qua biến môi trường `QLKH_SMOKE_EMAIL` /
   `QLKH_SMOKE_PASSWORD` nếu seed mặc định đổi sau này.
 
+### 2.4 Khai báo runtime cho orchestrator/CI (ADR-0015, TCK-CR-RUNTIME-01)
+
+`runtime.yaml` ở gốc repo là **nguồn sự thật DUY NHẤT** cho lệnh khởi động,
+cổng và đường health-check của devserver — đọc được bởi orchestrator (quy
+ước ADR-0031) thay vì phải suy luận từ README. Trước file này,
+`evidence.run/smoke` của orchestrator luôn `unverified` (lặp 11 lần liên
+tiếp, REL-027..038 — xem `docs/QLKH/changelog/CHANGELOG.md`).
+
+`tools/run_smoke.sh` là lệnh "run smoke" thật dùng khai báo đó: khởi động
+devserver theo `start_command` trong `runtime.yaml`, chờ `health_path`
+xanh, rồi gọi `infra/staging/wsl/smoke.sh` — luôn dừng tiến trình khi
+thoát (kể cả khi thất bại). Đây cũng chính là job `smoke` trong
+`.github/workflows/ci.yml`, nên mỗi PR đều có bằng chứng smoke thật, không
+chỉ trên staging WSL:
+
+```bash
+tools/run_smoke.sh
+```
+
+Khác với `infra/staging/wsl/smoke.sh` (mục 2.3 — gọi vào một staging **đã
+chạy sẵn**), `tools/run_smoke.sh` **tự khởi động và tự dừng** devserver
+trong tiến trình con của chính nó — dùng cho CI/orchestrator/máy dev, không
+thay thế quy trình deploy staging WSL ở mục 2.1–2.3.
+
+Đổi `port`/`health_path` trong `runtime.yaml` mà không đổi đồng bộ
+`deploy.sh`/`smoke.sh`/`qlkh/devserver/__main__.py` là bug — bốn nơi này
+phải luôn khớp nhau (xem comment đầu `runtime.yaml`).
+
 ## 3. Xem log
 
 Toàn bộ trạng thái vận hành (log + pidfile + sha đang chạy) nằm tại:
@@ -172,3 +200,8 @@ có Postgres/DB thật ở môi trường staging này. Hệ quả:
 - risk_tags=`[auth]` áp dụng cho `smoke.sh` (gọi `/auth/login` thật với tài
   khoản seed) — đã qua deep-review bảo mật (threat-model v1.45 mục 37,
   verdict PASS, 2 warn không chặn).
+- `runtime.yaml`/`tools/run_smoke.sh` (mục 2.4, TCK-CR-RUNTIME-01): job CI
+  `smoke` đã được thêm vào `.github/workflows/ci.yml`, nhưng agent viết
+  ticket này **không có khả năng trigger GitHub Actions thật** (không có
+  quyền push/mạng) để lấy link job pass — cần platform/release-engineer xác
+  nhận job `smoke` chạy xanh trên CI thật ở PR đầu tiên chạm tới nó.
