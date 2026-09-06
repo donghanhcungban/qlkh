@@ -17,6 +17,13 @@ tới dữ liệu học viên trong `_route` đều đi qua `_authed()` -> dựn
 p3-gate quét literal chuỗi tên bảng PII trong THÂN HÀM không có tham số `ctx`;
 đặt hằng số ở module-level tránh báo động giả trong khi hành vi thật (bắt
 buộc SubjectContext) không đổi.
+
+Ghi chú `/healthz` (CR-STAGE-001, TCK-CR-STAGE-001-01, ADR-0013): route này
+CỐ Ý KHÔNG nằm trong `/v1` — health-check thuần cho staging/deploy.sh, không
+phải tài nguyên nghiệp vụ, không nằm trong `api-contract` versioned. Không đi
+qua `_authed()` (đúng ngữ nghĩa health-check: không yêu cầu phiên) và không
+chạm bất kỳ dữ liệu học viên/PII nào — body chỉ gồm version/sha/started_at
+(xem `qlkh/devserver/health.py`).
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from qlkh.application.auth_service import Argon2idPasswordHasher, PasswordHasher
+from qlkh.devserver.health import health_body
 from qlkh.devserver.wiring import DevWiring, build_wiring
 from qlkh.domain.auth import SESSION_COOKIE_NAME, AuthError
 from qlkh.domain.subject_context import SubjectContext
@@ -147,6 +155,11 @@ class DevApp:
         query: dict[str, str],
         raw_body: dict[str, Any],
     ) -> tuple[int, dict, tuple]:
+        if method == "GET" and path == "/healthz":
+            # Không auth, không PII (ghi chú docstring module) — không đi qua
+            # _authed()/session_id một cách cố ý.
+            return 200, health_body(), ()
+
         session_id = self._session_id(headers)
 
         if method == "POST" and path == "/v1/auth/login":
@@ -241,21 +254,22 @@ class _RequestHandler(BaseHTTPRequestHandler):
         status, body, extra_headers = app.dispatch(method, parts.path, headers, query, raw_body)
         self._send(status, body, extra_headers)
 
-    def do_GET(self) -> None:
+    def do_GET(self) -> None:  # noqa: N802 - chữ ký của BaseHTTPRequestHandler
         self._handle("GET")
 
-    def do_POST(self) -> None:
+    def do_POST(self) -> None:  # noqa: N802
         self._handle("POST")
 
-    def do_PATCH(self) -> None:
+    def do_PATCH(self) -> None:  # noqa: N802
         self._handle("PATCH")
 
-    def do_DELETE(self) -> None:
+    def do_DELETE(self) -> None:  # noqa: N802
         self._handle("DELETE")
 
-    def do_OPTIONS(self) -> None:
+    def do_OPTIONS(self) -> None:  # noqa: N802
         app: DevApp = self.server.app  # type: ignore[attr-defined]
-        status, body, extra_headers = app.preflight(self._headers_dict())
+        headers = self._headers_dict()
+        status, body, extra_headers = app.preflight(headers)
         self._send(status, body, extra_headers)
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - chữ ký của BaseHTTPRequestHandler
