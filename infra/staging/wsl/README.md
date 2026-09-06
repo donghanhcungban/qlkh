@@ -14,17 +14,19 @@ release-engineer công bố. Ngoài phạm vi: DB thật, Redis, TLS, domain, cl
   yêu cầu máy ở trên là để chạy build (đặc biệt `npm run build`) và git clone,
   không phải mức dùng khi phục vụ traffic.
 - Phần mềm cần cài **trước lần deploy đầu tiên**:
-  - `git`, `curl`, `python3` (đã có sẵn trên hầu hết distro).
-  - [`uv`](https://docs.astral.sh/uv/) — quản lý môi trường Python của backend
-    (`uv sync --frozen` chạy trong `deploy.sh`).
+  - `git`, `curl`, `python3` (đã có sẵn trên hầu hết distro) — `python3 -m venv`
+    phải dùng được (gói `python3-venv` trên Debian/Ubuntu).
   - Node.js **LTS** (khuyến nghị dùng `nvm` hoặc gói LTS chính thức) — cần cho
     `npm run build` (xem mục 4, web build phục vụ tại `/`).
+  - **Không cần cài `uv`**: `deploy.sh` cài dependency Python bằng
+    `pip install --require-hashes -r requirements.lock` trong một virtualenv
+    riêng (`~/qlkh-staging/.venv`) — đúng cơ chế khoá phiên bản chính thức của
+    dự án (ADR-0014, đóng SD-13). Không dùng `uv sync --frozen`/`uv.lock`.
 
 Cài đặt lần đầu (ví dụ Ubuntu trên WSL2):
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git curl python3
-curl -LsSf https://astral.sh/uv/install.sh | sh   # cài uv
+sudo apt-get update && sudo apt-get install -y git curl python3 python3-venv
 # Node LTS — ví dụ qua nvm:
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
 nvm install --lts
@@ -32,7 +34,7 @@ nvm install --lts
 
 Không cần cài đặt gì thêm trước khi chạy `deploy.sh` lần đầu ngoài các mục
 trên — bản thân `deploy.sh` sẽ tự clone repo vào `~/qlkh-staging` nếu thư mục
-đó chưa tồn tại.
+đó chưa tồn tại, và tự tạo virtualenv Python nếu chưa có.
 
 ## 2. Lệnh deploy / rollback / smoke
 
@@ -46,10 +48,13 @@ infra/staging/wsl/deploy.sh v0.16.0
 ```
 
 - Idempotent: chạy lại cùng ref không lỗi, không nhân đôi tiến trình.
-- Việc script làm: fetch ref vào `~/qlkh-staging` → `uv sync --frozen` →
-  dừng tiến trình devserver cũ (qua pidfile) → khởi động
-  `python -m qlkh.devserver --host 0.0.0.0 --port 8080` (nohup) → chờ
-  `GET /healthz` trả 200 đúng sha (mặc định tối đa 30 giây).
+- Việc script làm: fetch ref vào `~/qlkh-staging` → cài dependency vào
+  `~/qlkh-staging/.venv` bằng `pip install --require-hashes -r
+  requirements.lock` (ADR-0014 — nguồn khoá phiên bản chính thức duy nhất,
+  không dùng `uv sync --frozen`/`uv.lock`) → dừng tiến trình devserver cũ
+  (qua pidfile) → khởi động `python -m qlkh.devserver --host 0.0.0.0 --port
+  8080` (nohup, dùng python của `.venv`) → chờ `GET /healthz` trả 200 đúng
+  sha (mặc định tối đa 30 giây).
 - `exit != 0` nếu bất kỳ bước nào thất bại, kể cả khi `/healthz` không xanh
   trong thời hạn chờ.
 - Tiêu chí nghiệm thu CR-STAGE-001: hoàn tất trong **≤ 2 phút**.
@@ -118,17 +123,22 @@ Cụ thể:
 - `~/qlkh-staging/var/previous` — sha chạy trước lần deploy thành công gần
   nhất (dùng cho `rollback.sh`).
 
+Virtualenv Python nằm tại `~/qlkh-staging/.venv` — không phải log/trạng thái
+deploy, chỉ là cache dependency được cài lại từ `requirements.lock` mỗi lần
+`deploy.sh` chạy; có thể xoá thủ công an toàn (script tự tạo lại ở lần chạy
+kế tiếp), khác với `var/` (không được xoá tay).
+
 Xem log theo thời gian thực:
 
 ```bash
 tail -f ~/qlkh-staging/var/devserver.log
 ```
 
-Lưu ý: `~/qlkh-staging/var/` nằm trong working tree của checkout staging
-nhưng **không** được git track trong repo nguồn — không xoá thư mục này bằng
-tay và không chạy `git clean -fd` thủ công bên trong `~/qlkh-staging` (các
-script đã tự loại trừ `var/` khi dọn working tree, nhưng thao tác tay ngoài
-script thì không được bảo vệ).
+Lưu ý: `~/qlkh-staging/var/` và `~/qlkh-staging/.venv/` nằm trong working tree
+của checkout staging nhưng **không** được git track trong repo nguồn — không
+xoá thư mục `var/` bằng tay và không chạy `git clean -fd` thủ công bên trong
+`~/qlkh-staging` (các script đã tự loại trừ `var/` và `.venv/` khi dọn working
+tree, nhưng thao tác tay ngoài script thì không được bảo vệ).
 
 ## 4. Giới hạn dữ liệu: in-memory, mất khi restart
 
