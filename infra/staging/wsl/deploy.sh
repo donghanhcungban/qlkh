@@ -19,6 +19,8 @@
 #   QLKH_HEALTHZ_TIMEOUT  số giây chờ /healthz xanh (mặc định: 30)
 #   QLKH_LOG_MAX_BYTES  ngưỡng xoay log, byte (mặc định: 10485760 = 10 MiB)
 #   QLKH_LOG_KEEP       số file log cũ giữ lại sau khi xoay (mặc định: 5)
+#   QLKH_SKIP_WEB_BUILD  "1" để bỏ qua build web/ (mặc định: không bỏ qua
+#                       nếu web/package.json tồn tại trong checkout)
 #
 # Trạng thái ghi tại $QLKH_STAGING_DIR/var/:
 #   devserver.pid       pid tiến trình devserver đang chạy
@@ -31,11 +33,25 @@
 # QUAN TRỌNG: var/ nằm BÊN TRONG working tree của $STAGING_DIR nhưng KHÔNG
 # được git track/ignore trong repo nguồn. `git clean -fd` mặc định sẽ coi
 # toàn bộ var/ là "untracked" và XOÁ SẠCH (pidfile, current, previous, log) —
-# phá vỡ idempotency và rollback ngay từ lần deploy thứ hai. Vì vậy:
-#   1. fetch_ref() PHẢI loại trừ var/ khỏi git clean (`-e var`).
+# phá vỡ idempotency và rollback ngay từ lần deploy thứ hai. Tương tự,
+# web/node_modules cũng là untracked (không commit) nên sẽ bị `git clean`
+# xoá mỗi lần deploy nếu không loại trừ, buộc `npm ci` cài lại toàn bộ mỗi
+# lần (chậm, có thể vượt ngân sách 2 phút của CR-STAGE-001). Vì vậy:
+#   1. fetch_ref() PHẢI loại trừ var/ và web/node_modules khỏi git clean
+#      (`-e var -e web/node_modules`).
 #   2. Sau khi checkout/clean, PHẢI mkdir -p lại VAR_DIR phòng trường hợp nó
 #      chưa tồn tại (checkout lần đầu) trước khi bất kỳ ai đọc/ghi file
 #      trạng thái bên trong.
+#   3. web/dist (build ra static) VẪN bị git clean xoá mỗi lần — đúng ý:
+#      dist phải được build lại từ đúng sha vừa checkout, không giữ bản cũ
+#      của sha trước. ensure_web_built() build lại nó trước healthz-gate.
+#
+# uv sync: KHÔNG dùng --frozen. Repo QLKH không commit uv.lock (chính sách
+# SD-13 dùng requirements.lock làm nguồn khoá phiên bản); `--frozen` đòi hỏi
+# uv.lock tồn tại và khớp tuyệt đối, nếu không có thì uv thất bại ngay
+# ("Unable to find lockfile at uv.lock, but --frozen was provided") và không
+# tiến trình nào được khởi động. `uv sync` (không cờ) tôn trọng
+# pyproject.toml/requirements.lock hiện có mà không yêu cầu uv.lock.
 #
 # Idempotent: chạy lại với cùng ref không lỗi, không nhân đôi tiến trình —
 # tiến trình cũ luôn bị dừng qua pidfile trước khi tiến trình mới được khởi
@@ -51,6 +67,7 @@ PID_FILE="$VAR_DIR/devserver.pid"
 LOG_FILE="$VAR_DIR/devserver.log"
 CURRENT_FILE="$VAR_DIR/current"
 PREVIOUS_FILE="$VAR_DIR/previous"
+WEB_DIR="$STAGING_DIR/web"
 
 HOST="${QLKH_STAGING_HOST:-0.0.0.0}"
 PORT="${QLKH_STAGING_PORT:-8080}"
@@ -58,6 +75,7 @@ HEALTHZ_URL="http://127.0.0.1:${PORT}/healthz"
 HEALTHZ_TIMEOUT="${QLKH_HEALTHZ_TIMEOUT:-30}"
 MAX_LOG_BYTES="${QLKH_LOG_MAX_BYTES:-10485760}"
 LOG_KEEP="${QLKH_LOG_KEEP:-5}"
+SKIP_WEB_BUILD="${QLKH_SKIP_WEB_BUILD:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # infra/staging/wsl/ -> gốc repo (3 cấp lên)
@@ -128,15 +146,37 @@ fetch_ref() {
     git -C "$STAGING_DIR" fetch --tags --force origin
     git -C "$STAGING_DIR" checkout --force --detach "$REF"
   fi
-  # KHÔNG được clean var/: nó không nằm trong git nhưng nằm trong working
-  # tree — `git clean -fd` không loại trừ sẽ xoá pidfile/current/previous/log
-  # (xem cảnh báo ở đầu file). "-e var" loại trừ đường dẫn var/ (và mọi thứ
-  # bên trong nó) khỏi việc dọn untracked files.
-  git -C "$STAGING_DIR" clean -fd -e var
+  # KHÔNG được clean var/ và web/node_modules: var/ không nằm trong git
+  # nhưng nằm trong working tree — `git clean -fd` không loại trừ sẽ xoá
+  # pidfile/current/previous/log (xem cảnh báo ở đầu file). web/node_modules
+  # cũng không commit; giữ lại giữa các lần deploy để tránh `npm ci` lại từ
+  # đầu mỗi lần (chậm). "-e ..." loại trừ đường dẫn (và mọi thứ bên trong
+  # nó) khỏi việc dọn untracked files; web/dist KHÔNG được loại trừ — nó
+  # phải bị xoá và build lại từ đúng sha vừa checkout.
+  git -C "$STAGING_DIR" clean -fd -e var -e web/node_modules
   # Phòng trường hợp checkout lần đầu (VAR_DIR chưa từng được tạo bên trong
   # STAGING_DIR) — tái tạo ngay sau clean, trước khi main() đọc/ghi bất kỳ
   # file trạng thái nào.
   mkdir -p "$VAR_DIR"
+}
+
+ensure_web_built() {
+  if [ "$SKIP_WEB_BUILD" = "1" ]; then
+    log "QLKH_SKIP_WEB_BUILD=1 — bỏ qua build web/"
+    return 0
+  fi
+  if [ ! -f "$WEB_DIR/package.json" ]; then
+    log "không có $WEB_DIR/package.json — bỏ qua build web/ (checkout không có frontend)"
+    return 0
+  fi
+  if [ ! -d "$WEB_DIR/node_modules" ]; then
+    log "web/node_modules chưa có — npm ci"
+    (cd "$WEB_DIR" && npm ci)
+  else
+    log "web/node_modules đã có (giữ lại qua các lần deploy) — bỏ qua npm ci"
+  fi
+  log "build web/dist"
+  (cd "$WEB_DIR" && npm run build)
 }
 
 wait_healthz() {
@@ -165,7 +205,9 @@ main() {
   new_sha="$(git -C "$STAGING_DIR" rev-parse HEAD)"
   log "sha mục tiêu: $new_sha"
 
-  (cd "$STAGING_DIR" && uv sync --frozen)
+  (cd "$STAGING_DIR" && uv sync)
+
+  ensure_web_built
 
   # Ghi sha hiện tại (của lần deploy trước) vào previous TRƯỚC KHI ghi đè —
   # chỉ khi đã từng deploy thành công (current tồn tại).
