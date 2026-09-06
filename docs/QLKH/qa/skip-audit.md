@@ -1,7 +1,8 @@
 # Skip Audit — bộ test QLKH
 
 - Ticket: TCK-CR-RUNTIME-07 (CR-RUNTIME-NFR-001, mục "test skip")
-- Ngày: 2026-09-06
+- Ngày khởi tạo: 2026-09-06
+- Ngày tái xác nhận (lượt chạy này): 2026-09-06
 - Người thực hiện: platform
 - Phương pháp: `grep`/search toàn bộ `**/*.py` cho `pytest.mark.skip`, `pytest.mark.skipif`,
   `pytest.skip(`, `xfail`, `unittest.skip`; đối chiếu với `.github/workflows/ci.yml`,
@@ -10,7 +11,8 @@
 
 ## Kết quả chạy test cục bộ (sandbox platform, KHÔNG phải CI thật)
 
-`run test` → PASS, **15 test skip**, toàn bộ nằm trong
+`run test` → PASS, **15 test skip** (đếm lại `s` trong output pytest ở lượt
+chạy này: 4 + 11 = 15, khớp danh sách mục 1), toàn bộ nằm trong
 `tests/schema/test_postgres_integration.py` (module-level `skipif` vì thiếu
 `QLKH_TEST_PG_DSN`/Postgres trong sandbox). Không có skip nào khác thực sự
 kích hoạt trong lần chạy này (xem mục 2 bên dưới — `test_healthz.py` có 2
@@ -58,16 +60,17 @@ dòng 33-40):
   cho phát hành thật.
 - **Xác nhận lại theo gợi ý trong scope ticket** ("SD-25 ... nay đã hết skip
   theo schema v9 — xác nhận lại"): **KHÔNG đúng, SD-25 CHƯA đóng.**
-  `schema/QLKH/core-schema.md` v10 (mới hơn v9, cùng ngày) đã tự xác nhận lại
-  điều này: thử lấy bằng chứng CI thật, sandbox vẫn không có Postgres/DSN,
-  giữ nguyên `accepted_for_test`, không suy đoán đóng.
-- **Phát hiện mới của audit này**: `.github/workflows/ci.yml` job `test`
-  (dòng 33-52) **ĐÃ có** service `postgres:16` và đặt
-  `QLKH_TEST_PG_DSN=postgresql://test:test@localhost:5432/qlkh_test` — nghĩa
-  là trên CI thật (không phải sandbox agent), 15 test này **chạy thật, không
-  skip**. Việc còn thiếu duy nhất là **bằng chứng job `test` đã chạy PASS
-  trên CI thật** (agent không có tool trigger GitHub Actions — cùng giới hạn
-  đã ghi trong `infra/QLKH/tck-cr-runtime-01-runtime-declaration.md`).
+  Đã kiểm tra lại lần thứ hai (lượt chạy này, `run test` + `search`): 15 test
+  vẫn skip trong sandbox, không có Postgres/DSN, giữ nguyên
+  `accepted_for_test`, không suy đoán đóng.
+- **Xác nhận lại `.github/workflows/ci.yml` (lượt này, đọc trực tiếp dòng
+  33-68)**: job `test` **ĐÃ có** service `postgres:16` (dòng 36-37), đặt
+  `QLKH_TEST_PG_DSN=postgresql://test:test@localhost:5432/qlkh_test` (dòng
+  52), và cài `postgresql-client` tường minh (dòng 63-68) — nghĩa là trên CI
+  thật (không phải sandbox agent), 15 test này **chạy thật, không skip**.
+  Việc còn thiếu duy nhất là **bằng chứng job `test` đã chạy PASS trên CI
+  thật** (agent không có tool trigger GitHub Actions — cùng giới hạn đã ghi
+  trong `infra/QLKH/tck-cr-runtime-01-runtime-declaration.md`).
 - **Việc cần làm tiếp** (không thuộc phạm vi ticket này, ghi rõ để không thất
   lạc): platform/release-engineer xác nhận job `test` PASS trên CI thật (dán
   link/log run cụ thể), sau đó chủ sở hữu `prd` (namespace `prd`) cập nhật
@@ -98,7 +101,9 @@ Trong `test_sha_matches_real_git_sha_of_running_build`:
   che giấu khả năng test này không kiểm tra được gì khi có sự cố runner.
   Ticket này CHƯA được tạo trong topic `tasks` bởi agent này (namespace ghi
   được của platform chỉ có `infra`); đề nghị delivery-lead tạo ticket thật
-  với id nêu trên ở lượt kế tiếp.
+  với id nêu trên ở lượt kế tiếp. **Nhắc lại lần 2 (lượt chạy này)**: ticket
+  đề xuất vẫn CHƯA thấy xuất hiện trong `tasks` tại thời điểm audit này —
+  đề nghị delivery-lead xử lý, không tự ý coi là đã xong.
 
 ## Tổng kết đối chiếu acceptance
 
@@ -119,4 +124,5 @@ Trong `test_sha_matches_real_git_sha_of_running_build`:
 
 | version | ngày | thay đổi |
 |---|---|---|
+| 2 | 2026-09-06 | Tái xác nhận lượt chạy này: đếm lại 15 skip qua `run test` (s-count 4+11), đối chiếu lại `ci.yml` dòng 33-68 tại chỗ, nhắc lại lần 2 việc TCK-QA-SKIP-HEALTHZ-01 vẫn chưa được tạo thật trong `tasks`. Không đổi kết luận so với v1. |
 | 1 | 2026-09-06 | Khởi tạo audit: 15 test skip (SD-25, đã có ticket/điều kiện) + 2 điểm skip có điều kiện chưa có ticket (đề xuất TCK-QA-SKIP-HEALTHZ-01). |
