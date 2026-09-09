@@ -219,11 +219,41 @@ ensure_web_built() {
     return 0
   fi
   load_linux_node
+
+  # node_modules được giữ lại qua các lần deploy (không bị git clean xoá) để
+  # khỏi cài lại từ đầu mỗi lần. Nhưng "đã có" KHÔNG đồng nghĩa "còn đúng":
+  # sha vừa checkout có thể khai thêm dependency mà bản cài cũ không có.
+  #
+  # Đo 2026-09-09: sau khi hoà company/integration vào nhánh ticket, web/
+  # package.json thêm axe-core (test a11y của TCK-CR-RUNTIME-04). node_modules
+  # cũ vẫn còn nên bước npm ci bị bỏ qua, và build chết ở
+  # "TS2307: Cannot find module 'axe-core'" — thông điệp không hề nói rằng
+  # nguyên nhân là node_modules lỗi thời.
+  #
+  # npm ghi node_modules/.package-lock.json mỗi lần cài, nên so sánh nó với
+  # package-lock.json của checkout là cách rẻ và đúng để biết bản cài có còn
+  # khớp hay không.
+  # CHÚ Ý: web/package-lock.json KHÔNG được commit trong repo này (chỉ
+  # requirements.lock của Python được khoá — ADR-0014/SD-13 không nói gì về
+  # frontend). `git clean` ở fetch_ref xoá lockfile chưa track đó mỗi lần
+  # deploy, nên `npm ci` — vốn BẮT BUỘC phải có package-lock.json — không bao
+  # giờ chạy được ở đây. Dùng `npm install` khi thiếu lockfile.
+  #
+  # Đây là một lỗ hổng khoá phiên bản thật của frontend (build không tái lập
+  # được từng byte), đã báo lại cho công ty như một finding riêng; deploy.sh
+  # chỉ chịu trách nhiệm không tự chết vì nó.
+  local installed_marker="$WEB_DIR/node_modules/.package-lock.json"
+  local npm_cmd="install"
+  [ -f "$WEB_DIR/package-lock.json" ] && npm_cmd="ci"
+
   if [ ! -d "$WEB_DIR/node_modules" ]; then
-    log "web/node_modules chưa có — npm ci"
-    (cd "$WEB_DIR" && npm ci)
+    log "web/node_modules chưa có — npm $npm_cmd"
+    (cd "$WEB_DIR" && npm "$npm_cmd")
+  elif [ ! -f "$installed_marker" ] || [ "$WEB_DIR/package.json" -nt "$installed_marker" ]; then
+    log "web/node_modules lỗi thời so với package.json — npm $npm_cmd lại"
+    (cd "$WEB_DIR" && npm "$npm_cmd")
   else
-    log "web/node_modules đã có (giữ lại qua các lần deploy) — bỏ qua npm ci"
+    log "web/node_modules đã có và còn khớp package.json — bỏ qua cài lại"
   fi
   log "build web/dist"
   (cd "$WEB_DIR" && npm run build)
@@ -235,13 +265,60 @@ setup_venv() {
   # trong repo). Cài dependency bằng đúng cơ chế job `test` của CI dùng
   # (pip install --require-hashes -r requirements.lock) để staging và CI
   # không lệch nhau.
-  if [ ! -d "$VENV_DIR" ]; then
+  # Điều kiện là "có pip chạy được", KHÔNG phải "thư mục tồn tại": một lần tạo
+  # venv thất bại giữa chừng vẫn để lại $VENV_DIR rỗng/thiếu pip, và khi đó
+  # kiểm theo thư mục sẽ bỏ qua bước tạo rồi chết ở dòng gọi pip với thông
+  # điệp "No such file or directory" — đo được 2026-09-09 sau khi
+  # `python3 -m venv` hỏng vì thiếu ensurepip.
+  if [ ! -x "$VENV_DIR/bin/pip" ]; then
+    if [ -d "$VENV_DIR" ]; then
+      log "venv tại $VENV_DIR thiếu pip (tạo hỏng dở) — xoá và tạo lại"
+      rm -rf "$VENV_DIR"
+    fi
     log "tạo virtualenv tại $VENV_DIR"
-    python3 -m venv "$VENV_DIR"
+    create_venv
   fi
   log "cài dependency từ requirements.lock (--require-hashes)"
   "$VENV_DIR/bin/pip" install --quiet --upgrade pip
   "$VENV_DIR/bin/pip" install --quiet --require-hashes -r "$STAGING_DIR/requirements.lock"
+}
+
+# Tạo virtualenv CÓ pip sẵn bên trong.
+#
+# `python3 -m venv` là lựa chọn đầu tiên nhưng KHÔNG chắc chạy được: trên
+# Debian/Ubuntu, ensurepip bị tách sang gói python3.X-venv và không cài sẵn.
+# Đo 2026-09-09 trên WSL Ubuntu của chủ dự án (python3.14): lệnh đó thất bại
+# với "ensurepip is not available ... apt install python3.14-venv", tức là
+# muốn deploy phải có quyền sudo — không chấp nhận được cho một script deploy.
+#
+# `uv venv --seed` không cần ensurepip (uv tự đặt pip vào venv) nên dùng làm
+# đường chính khi có uv. Lưu ý uv thường nằm ở ~/.local/bin, thư mục KHÔNG có
+# trên PATH của shell không tương tác — cùng loại bẫy với nvm ở
+# load_linux_node() — nên phải tìm nó theo đường dẫn tuyệt đối.
+create_venv() {
+  local uv_bin=""
+  if command -v uv >/dev/null 2>&1; then
+    uv_bin="$(command -v uv)"
+  elif [ -x "$HOME/.local/bin/uv" ]; then
+    uv_bin="$HOME/.local/bin/uv"
+  fi
+
+  if [ -n "$uv_bin" ]; then
+    log "tạo venv bằng $uv_bin (uv venv --seed)"
+    "$uv_bin" venv --seed "$VENV_DIR"
+    return 0
+  fi
+
+  log "không có uv — thử python3 -m venv"
+  if python3 -m venv "$VENV_DIR"; then
+    return 0
+  fi
+
+  log "LỖI: không tạo được virtualenv tại $VENV_DIR."
+  log "  python3 -m venv thất bại (thường vì thiếu ensurepip) và không tìm thấy uv."
+  log "  Sửa: cài uv ('curl -LsSf https://astral.sh/uv/install.sh | sh')"
+  log "  hoặc cài gói venv của hệ thống ('sudo apt install python3-venv')."
+  return 1
 }
 
 wait_healthz() {
