@@ -160,6 +160,41 @@ fetch_ref() {
   mkdir -p "$VAR_DIR"
 }
 
+# Nạp Node bản LINUX vào PATH trước mọi lệnh npm.
+#
+# WSL kế thừa PATH của Windows, nên `npm` trần thường trỏ tới
+# /mnt/c/Program Files/nodejs/npm — shim gọi CMD.EXE. CMD không hỗ trợ đường
+# dẫn UNC (\\wsl.localhost\...) nên nó bỏ thư mục hiện tại, nhảy về thư mục
+# Windows rồi báo "'tsc' is not recognized" — build chết mà thông điệp lỗi
+# không hề nhắc tới nguyên nhân thật.
+#
+# Đo 2026-09-09 trên WSL Ubuntu của chủ dự án: cùng một lệnh `npm run build`,
+# Node của Windows chết ở tsc, Node Linux (nvm v22.23.2) xong trong 449ms.
+#
+# nvm KHÔNG tự nạp trong shell không tương tác (deploy.sh chạy qua nohup/CI)
+# vì ~/.bashrc thoát sớm — nên phải source tay ở đây.
+load_linux_node() {
+  if command -v node >/dev/null 2>&1 && [[ "$(command -v node)" != /mnt/* ]]; then
+    return 0  # đã có node Linux trong PATH
+  fi
+  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  if [ -s "$nvm_dir/nvm.sh" ]; then
+    log "nạp Node từ nvm ($nvm_dir)"
+    # shellcheck disable=SC1091
+    NVM_DIR="$nvm_dir" . "$nvm_dir/nvm.sh"
+  fi
+  if ! command -v node >/dev/null 2>&1 || [[ "$(command -v node)" == /mnt/* ]]; then
+    log "LỖI: không có Node.js bản Linux trong WSL."
+    log "  node hiện tại: $(command -v node 2>/dev/null || echo '(không có)')"
+    log "  Node của Windows (/mnt/c/...) KHÔNG dùng được: nó gọi CMD.EXE, mà CMD"
+    log "  không hỗ trợ đường dẫn UNC của WSL nên build web/ chết ở tsc."
+    log "  Sửa: cài Node trong WSL — 'nvm install 22' hoặc 'sudo apt install nodejs'."
+    log "  Hoặc chạy lại với QLKH_SKIP_WEB_BUILD=1 nếu chấp nhận '/' trả 404."
+    return 1
+  fi
+  log "node=$(command -v node) $(node --version)"
+}
+
 ensure_web_built() {
   if [ "$SKIP_WEB_BUILD" = "1" ]; then
     log "QLKH_SKIP_WEB_BUILD=1 — bỏ qua build web/"
@@ -169,6 +204,7 @@ ensure_web_built() {
     log "không có $WEB_DIR/package.json — bỏ qua build web/ (checkout không có frontend)"
     return 0
   fi
+  load_linux_node
   if [ ! -d "$WEB_DIR/node_modules" ]; then
     log "web/node_modules chưa có — npm ci"
     (cd "$WEB_DIR" && npm ci)
