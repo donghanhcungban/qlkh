@@ -18,3 +18,13 @@ addopts = "-q"
 [tool.mypy]
 python_version = "3.11"
 warn_unused_ignores = true
+
+# TCK-CR-RUNTIME-05 (CR-RUNTIME-NFR-001, risk_tags=[pii]): mutation testing thật
+# cho luồng xoá dữ liệu chủ thể (ND13, /erasure-requests) và luồng ghi danh
+# (enrollment). Không đổi hành vi nghiệp vụ của các module này — chỉ khai
+# phạm vi mutmut. Dev-tool riêng cho job CI `mutation`, KHÔNG vào
+# requirements.lock/dependencies (cùng quy ước với ruff/mypy/import-linter).
+[tool.mutmut]
+paths_to_mutate = "qlkh/application/erasure_http.py,qlkh/application/class_service.py,qlkh/application/class_http.py"
+tests_dir = "tests/application"
+runner = "python -m pytest tests/application/test_erasure_http.py tests/application/test_class_service.py tests/application/test_class_http.py -q"

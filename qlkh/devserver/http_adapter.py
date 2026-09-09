@@ -24,6 +24,15 @@ phải tài nguyên nghiệp vụ, không nằm trong `api-contract` versioned. 
 qua `_authed()` (đúng ngữ nghĩa health-check: không yêu cầu phiên) và không
 chạm bất kỳ dữ liệu học viên/PII nào — body chỉ gồm version/sha/started_at
 (xem `qlkh/devserver/health.py`).
+
+Ghi chú static `web/dist` (CR-STAGE-001, TCK-CR-STAGE-001-04, ADR-0013 mục 4):
+mọi GET không khớp `/v1/*` và không phải `/healthz` được `_RequestHandler`
+chuyển cho `qlkh/devserver/static_files.py` phục vụ trực tiếp từ `web/dist`
+(cùng origin, không CORS) — TRƯỚC KHI rơi vào `DevApp._route` (route đó chỉ
+còn nhận `/v1/*` và `/healthz`, `_route` không còn là nơi trả 404 kiểu
+catch-all cho mọi đường dẫn khác nữa). `DevApp` (JSON thuần) không biết gì về
+file tĩnh/byte thô — tách bạch ở tầng `_RequestHandler` để không lẫn hai loại
+response (JSON vs byte thô) vào chung một luồng dispatch.
 """
 
 from __future__ import annotations
@@ -39,6 +48,13 @@ from urllib.parse import parse_qs, urlsplit
 
 from qlkh.application.auth_service import Argon2idPasswordHasher, PasswordHasher
 from qlkh.devserver.health import health_body
+from qlkh.devserver.static_files import (
+    DistNotBuilt,
+    ensure_dist_built,
+    index_html_path,
+    looks_like_asset_request,
+    resolve_static_file,
+)
 from qlkh.devserver.wiring import DevWiring, build_wiring
 from qlkh.domain.auth import SESSION_COOKIE_NAME, AuthError
 from qlkh.domain.subject_context import SubjectContext
@@ -238,6 +254,48 @@ class _RequestHandler(BaseHTTPRequestHandler):
         if payload:
             self.wfile.write(payload)
 
+    def _send_bytes(self, status: int, payload: bytes, content_type: str) -> None:
+        """Trả byte thô (file tĩnh) — khác `_send` (JSON thuần) vì `web/dist`
+        chứa HTML/JS/CSS/ảnh, không phải JSON (xem `static_files.py`).
+        """
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_static(self, path: str) -> None:
+        """Phục vụ `web/dist` cho mọi GET không phải `/v1/*` hay `/healthz`.
+
+        Thứ tự quyết định (CR-STAGE-001, TCK-CR-STAGE-001-04):
+        1. `web/dist` chưa build (thiếu `index.html`) -> lỗi rõ ràng (503,
+           không phải `FileNotFoundError` mơ hồ).
+        2. Khớp file thật trong dist (vd `/assets/app.js`) -> trả đúng nội
+           dung + mime-type của chính file đó.
+        3. Không khớp nhưng "trông giống" một asset (có phần mở rộng) -> 404
+           thật, không giả vờ đó là route SPA.
+        4. Không khớp và không giống asset (route điều hướng nội bộ SPA) ->
+           trả `index.html` để client-side router xử lý.
+        """
+        try:
+            ensure_dist_built()
+        except DistNotBuilt as exc:
+            self._send(*_problem(503, "dist-not-built", "Service Unavailable", str(exc)))
+            return
+
+        resolved = resolve_static_file(path)
+        if resolved is not None:
+            file_path, content_type = resolved
+            self._send_bytes(200, file_path.read_bytes(), content_type)
+            return
+
+        if looks_like_asset_request(path):
+            self._send(*_problem(404, "not-found", "Not Found"))
+            return
+
+        index_path, content_type = index_html_path()
+        self._send_bytes(200, index_path.read_bytes(), content_type)
+
     def _handle(self, method: str) -> None:
         parts = urlsplit(self.path)
         query = {k: v[0] for k, v in parse_qs(parts.query).items()}
@@ -255,7 +313,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
         self._send(status, body, extra_headers)
 
     def do_GET(self) -> None:  # noqa: N802 - chữ ký của BaseHTTPRequestHandler
-        self._handle("GET")
+        parts = urlsplit(self.path)
+        if parts.path.startswith("/v1/") or parts.path == "/healthz":
+            self._handle("GET")
+            return
+        # Ghi chú module: mọi GET khác (kể cả '/') là static web/dist, cùng
+        # origin, không qua DevApp/_route (xem docstring module).
+        self._serve_static(parts.path)
 
     def do_POST(self) -> None:  # noqa: N802
         self._handle("POST")

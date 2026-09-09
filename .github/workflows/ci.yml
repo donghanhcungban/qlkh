@@ -30,15 +30,126 @@ jobs:
 
   test:
     runs-on: ubuntu-24.04
+    # SD-25: service Postgres thật cho test tích hợp schema (tests/schema/test_postgres_integration.py).
+    # Version 16 khớp phiên bản dự kiến staging/production; đổi tag nếu platform xác nhận version khác.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: qlkh_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # SD-25: DSN của service postgres ở trên; test_postgres_integration.py auto-skip nếu
+      # biến này không đặt — ở đây LUÔN đặt nên test chạy thật (không skip) trong CI.
+      QLKH_TEST_PG_DSN: postgresql://test:test@localhost:5432/qlkh_test
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      # SD-13: phụ thuộc runtime cài từ lockfile có hash; lệch hash hay thiếu hash là fail (T-12).
+      # ADR-0014 (đóng SD-13): requirements.lock là nguồn khoá phiên bản chính thức
+      # duy nhất; cài ở chế độ frozen + --require-hashes, lệch hash hay thiếu hash là fail (T-12).
       - run: pip install --require-hashes -r requirements.lock
       - run: pip install pytest==8.3.3 pytest-cov==5.0.0 pyyaml==6.0.2
+      # SD-25: test_postgres_integration.py gọi psql qua subprocess; runner ubuntu-24.04 có sẵn
+      # postgresql-client, nhưng cài tường minh để không phụ thuộc image mặc định của runner.
+      - run: |
+          set -euo pipefail
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y --no-install-recommends postgresql-client
+          fi
+      - run: pg_isready -h localhost -p 5432 -U test -d qlkh_test -t 30
       - run: pytest --cov=qlkh --cov=tools --cov-branch --cov-fail-under=80
+
+  mutation:
+    # TCK-CR-RUNTIME-05 (CR-RUNTIME-NFR-001, risk_tags=[pii]): mutation testing
+    # thật cho luồng xoá dữ liệu chủ thể (ND13, POST /erasure-requests,
+    # qlkh/application/erasure_http.py) và luồng ghi danh (enrollment,
+    # class_service.py/class_http.py). Không đổi hành vi nghiệp vụ của các
+    # module này trong ticket này — chỉ đưa vào phạm vi mutmut (paths_to_mutate
+    # khai ở pyproject.toml [tool.mutmut]).
+    #
+    # continue-on-error: true CÓ CHỦ ĐÍCH cho lần chạy đầu tiên: agent hiện thực
+    # ticket này không có quyền thực thi tuỳ ý (`run` chỉ nhận git_diff/
+    # git_status/lint/test, không cài/gọi được mutmut) nên KHÔNG có cách tạo
+    # bằng chứng mutation score thật trong worktree cô lập. Đây là job CI thật,
+    # sẽ tạo bằng chứng thật khi chạy trên runner GitHub Actions (có pip install
+    # tuỳ ý) — không phải số liệu đoán. platform/release-engineer PHẢI xác nhận
+    # kết quả lần chạy CI thật đầu tiên: nếu mutation score erasure_http.py VÀ
+    # enrollment (class_service.py + class_http.py) đều >= 70%, gỡ
+    # continue-on-error ngay; nếu <70%, mở lại ticket bổ sung test (ADR-0028:
+    # thuộc test-author, không sửa migration/logic nghiệp vụ). Bỏ qua bước này
+    # thì cổng mất tác dụng chặn vĩnh viễn mà không ai biết.
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install --require-hashes -r requirements.lock
+      # Dev-tool riêng cho job này, KHÔNG vào requirements.lock/dependencies —
+      # cùng quy ước với ruff/mypy/import-linter/pip-audit ở các job khác.
+      - run: pip install mutmut==3.2.2 pyyaml==6.0.2 pytest==8.3.3
+      - name: mutmut run (erasure_http.py + enrollment)
+        run: |
+          set -euo pipefail
+          mutmut run || true
+      - name: mutmut results (log thật, không ước lượng)
+        run: mutmut results
+      - name: mutation score >= 70% (chỉ cảnh báo, xem continue-on-error ở trên)
+        run: |
+          set -euo pipefail
+          total=$(mutmut results | grep -c '^' || echo 0)
+          echo "Xem log 'mutmut results' phía trên để lấy % thật; ngưỡng yêu cầu >= 70% (CR-RUNTIME-NFR-001)."
+
+  lock-check:
+    # ADR-0014 (đóng SD-13): requirements.lock PHẢI đồng bộ với pyproject.toml.
+    # Sinh lại lockfile từ pyproject.toml và diff với bản đã commit; lệch (quên
+    # chạy lại `uv pip compile` sau khi đổi dependency) => fail rõ ràng, thay vì
+    # để job `test` âm thầm cài đúng phiên bản cũ trong khi pyproject.toml đã đổi.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install uv==0.4.29
+      - run: uv pip compile pyproject.toml --generate-hashes --python-version "${{ env.PYTHON_VERSION }}" -o requirements.lock.generated
+      - name: requirements.lock phải khớp pyproject.toml
+        run: |
+          set -euo pipefail
+          if ! diff -u requirements.lock requirements.lock.generated; then
+            echo "::error::requirements.lock lệch so với pyproject.toml (ADR-0014). Chạy lại: uv pip compile pyproject.toml --generate-hashes --python-version ${{ env.PYTHON_VERSION }} -o requirements.lock" >&2
+            exit 1
+          fi
+
+  smoke:
+    # ADR-0015 / ADR-0031 / TCK-CR-RUNTIME-01: đóng gap evidence.run/smoke
+    # unverified lặp lại 11 lần liên tiếp (REL-027..038, xem
+    # docs/QLKH/changelog/CHANGELOG.md). Đọc runtime.yaml (nguồn sự thật DUY
+    # NHẤT cho lệnh khởi động/cổng/health) qua tools/run_smoke.sh: khởi động
+    # devserver thật, chờ /healthz xanh, chạy infra/staging/wsl/smoke.sh
+    # (4 bước HTTP thật, tài khoản seed) — bằng chứng thật, không phải khai.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # Cùng cơ chế cài dependency với job `test` và infra/staging/wsl/deploy.sh (ADR-0014).
+      - run: pip install --require-hashes -r requirements.lock
+      - run: chmod +x tools/run_smoke.sh infra/staging/wsl/smoke.sh
+      - run: tools/run_smoke.sh
 
   fitness:
     runs-on: ubuntu-24.04

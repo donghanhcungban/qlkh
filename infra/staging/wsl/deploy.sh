@@ -6,6 +6,18 @@
 # bị loại" trong ADR-0013) — chỉ nohup + pidfile, phù hợp một môi trường thử
 # nghiệm một người dùng trên máy 4CPU/8GB/20GB.
 #
+# Khoá phiên bản dependency (ADR-0014, đóng nợ SD-13): `requirements.lock`
+# (sinh bằng `uv pip compile pyproject.toml --generate-hashes`, commit vào
+# repo) là NGUỒN KHOÁ PHIÊN BẢN CHÍNH THỨC DUY NHẤT của dự án — xem
+# ADR-0014 tại architecture/QLKH/adr/ADR-0014-debt-closure-sd13-def01-def03.md.
+# Script này CỐ Ý KHÔNG dùng `uv sync --frozen` (yêu cầu `uv.lock`, file
+# không tồn tại và không được commit trong repo này): ADR-0014 loại phương án
+# đó vì đã từng gây lỗi thật trên WSL (uv v0.17.4, xem
+# infra/staging/wsl/deploy-rollback-status.md) do repo không đồng bộ
+# `uv.lock`. Thay vào đó, dependency được cài vào một virtualenv cục bộ bằng
+# `pip install --require-hashes -r requirements.lock` — CÙNG cơ chế job
+# `test` trong .github/workflows/ci.yml dùng, không lệch giữa CI và staging.
+#
 # Cách dùng:
 #   infra/staging/wsl/deploy.sh <git-ref>
 #
@@ -30,15 +42,19 @@
 #                       nhất (ghi TRƯỚC khi ghi đè `current`) — rollback.sh
 #                       đọc file này.
 #
-# QUAN TRỌNG: var/ nằm BÊN TRONG working tree của $STAGING_DIR nhưng KHÔNG
-# được git track/ignore trong repo nguồn. `git clean -fd` mặc định sẽ coi
-# toàn bộ var/ là "untracked" và XOÁ SẠCH (pidfile, current, previous, log) —
-# phá vỡ idempotency và rollback ngay từ lần deploy thứ hai. Tương tự,
-# web/node_modules cũng là untracked (không commit) nên sẽ bị `git clean`
-# xoá mỗi lần deploy nếu không loại trừ, buộc `npm ci` cài lại toàn bộ mỗi
-# lần (chậm, có thể vượt ngân sách 2 phút của CR-STAGE-001). Vì vậy:
-#   1. fetch_ref() PHẢI loại trừ var/ và web/node_modules khỏi git clean
-#      (`-e var -e web/node_modules`).
+# Virtualenv Python persistent tại $QLKH_STAGING_DIR/.venv (không phải trạng
+# thái deploy — giữ lại giữa các lần deploy để đỡ cài lại dependency mỗi lần,
+# nhưng KHÔNG được coi là nguồn khoá phiên bản: nội dung của nó luôn được
+# đồng bộ lại với `requirements.lock` của sha đang deploy ở mỗi lần chạy).
+#
+# QUAN TRỌNG: var/, .venv/ và web/node_modules nằm BÊN TRONG working tree của
+# $STAGING_DIR nhưng KHÔNG được git track/ignore trong repo nguồn. `git clean
+# -fd` mặc định coi cả ba là "untracked" và XOÁ SẠCH (pidfile, current,
+# previous, log, virtualenv, và toàn bộ node_modules) — phá vỡ idempotency và
+# rollback ngay từ lần deploy thứ hai, đồng thời buộc `npm ci` cài lại từ đầu
+# mỗi lần (chậm, có thể vượt ngân sách 2 phút của CR-STAGE-001). Vì vậy:
+#   1. fetch_ref() PHẢI loại trừ cả ba khỏi git clean
+#      (`-e var -e .venv -e web/node_modules`).
 #   2. Sau khi checkout/clean, PHẢI mkdir -p lại VAR_DIR phòng trường hợp nó
 #      chưa tồn tại (checkout lần đầu) trước khi bất kỳ ai đọc/ghi file
 #      trạng thái bên trong.
@@ -46,12 +62,10 @@
 #      dist phải được build lại từ đúng sha vừa checkout, không giữ bản cũ
 #      của sha trước. ensure_web_built() build lại nó trước healthz-gate.
 #
-# uv sync: KHÔNG dùng --frozen. Repo QLKH không commit uv.lock (chính sách
-# SD-13 dùng requirements.lock làm nguồn khoá phiên bản); `--frozen` đòi hỏi
-# uv.lock tồn tại và khớp tuyệt đối, nếu không có thì uv thất bại ngay
-# ("Unable to find lockfile at uv.lock, but --frozen was provided") và không
-# tiến trình nào được khởi động. `uv sync` (không cờ) tôn trọng
-# pyproject.toml/requirements.lock hiện có mà không yêu cầu uv.lock.
+# Dependency Python: KHÔNG dùng `uv sync` (bất kể cờ). setup_venv() cài bằng
+# `pip install --require-hashes -r requirements.lock` vào $STAGING_DIR/.venv —
+# xem ADR-0014 và chú thích ở đầu file. Đây là cùng cơ chế job `test` của CI
+# dùng, nên staging và CI không lệch nhau.
 #
 # Idempotent: chạy lại với cùng ref không lỗi, không nhân đôi tiến trình —
 # tiến trình cũ luôn bị dừng qua pidfile trước khi tiến trình mới được khởi
@@ -63,6 +77,7 @@ REF="${1:?Cách dùng: deploy.sh <git-ref>}"
 
 STAGING_DIR="${QLKH_STAGING_DIR:-$HOME/qlkh-staging}"
 VAR_DIR="$STAGING_DIR/var"
+VENV_DIR="$STAGING_DIR/.venv"
 PID_FILE="$VAR_DIR/devserver.pid"
 LOG_FILE="$VAR_DIR/devserver.log"
 CURRENT_FILE="$VAR_DIR/current"
@@ -146,14 +161,13 @@ fetch_ref() {
     git -C "$STAGING_DIR" fetch --tags --force origin
     git -C "$STAGING_DIR" checkout --force --detach "$REF"
   fi
-  # KHÔNG được clean var/ và web/node_modules: var/ không nằm trong git
-  # nhưng nằm trong working tree — `git clean -fd` không loại trừ sẽ xoá
-  # pidfile/current/previous/log (xem cảnh báo ở đầu file). web/node_modules
-  # cũng không commit; giữ lại giữa các lần deploy để tránh `npm ci` lại từ
-  # đầu mỗi lần (chậm). "-e ..." loại trừ đường dẫn (và mọi thứ bên trong
-  # nó) khỏi việc dọn untracked files; web/dist KHÔNG được loại trừ — nó
-  # phải bị xoá và build lại từ đúng sha vừa checkout.
-  git -C "$STAGING_DIR" clean -fd -e var -e web/node_modules
+  # KHÔNG được clean var/, .venv/ hay web/node_modules: cả ba không nằm trong
+  # git nhưng nằm trong working tree — `git clean -fd` không loại trừ sẽ xoá
+  # pidfile/current/previous/log, virtualenv, và node_modules (xem cảnh báo ở
+  # đầu file). "-e ..." loại trừ đường dẫn (và mọi thứ bên trong nó) khỏi việc
+  # dọn untracked files; web/dist KHÔNG được loại trừ — nó phải bị xoá và
+  # build lại từ đúng sha vừa checkout, không giữ bản cũ của sha trước.
+  git -C "$STAGING_DIR" clean -fd -e var -e .venv -e web/node_modules
   # Phòng trường hợp checkout lần đầu (VAR_DIR chưa từng được tạo bên trong
   # STAGING_DIR) — tái tạo ngay sau clean, trước khi main() đọc/ghi bất kỳ
   # file trạng thái nào.
@@ -164,9 +178,9 @@ fetch_ref() {
 #
 # WSL kế thừa PATH của Windows, nên `npm` trần thường trỏ tới
 # /mnt/c/Program Files/nodejs/npm — shim gọi CMD.EXE. CMD không hỗ trợ đường
-# dẫn UNC (\\wsl.localhost\...) nên nó bỏ thư mục hiện tại, nhảy về thư mục
-# Windows rồi báo "'tsc' is not recognized" — build chết mà thông điệp lỗi
-# không hề nhắc tới nguyên nhân thật.
+# dẫn UNC của WSL nên nó bỏ thư mục hiện tại, nhảy về thư mục Windows rồi báo
+# "'tsc' is not recognized" — build chết mà thông điệp lỗi không hề nhắc tới
+# nguyên nhân thật.
 #
 # Đo 2026-09-09 trên WSL Ubuntu của chủ dự án: cùng một lệnh `npm run build`,
 # Node của Windows chết ở tsc, Node Linux (nvm v22.23.2) xong trong 449ms.
@@ -215,6 +229,21 @@ ensure_web_built() {
   (cd "$WEB_DIR" && npm run build)
 }
 
+setup_venv() {
+  # ADR-0014 (đóng SD-13): requirements.lock là nguồn khoá phiên bản chính
+  # thức duy nhất; KHÔNG dùng `uv sync --frozen` (cần uv.lock, không tồn tại
+  # trong repo). Cài dependency bằng đúng cơ chế job `test` của CI dùng
+  # (pip install --require-hashes -r requirements.lock) để staging và CI
+  # không lệch nhau.
+  if [ ! -d "$VENV_DIR" ]; then
+    log "tạo virtualenv tại $VENV_DIR"
+    python3 -m venv "$VENV_DIR"
+  fi
+  log "cài dependency từ requirements.lock (--require-hashes)"
+  "$VENV_DIR/bin/pip" install --quiet --upgrade pip
+  "$VENV_DIR/bin/pip" install --quiet --require-hashes -r "$STAGING_DIR/requirements.lock"
+}
+
 wait_healthz() {
   local expected_sha="$1"
   local deadline=$((SECONDS + HEALTHZ_TIMEOUT))
@@ -241,7 +270,7 @@ main() {
   new_sha="$(git -C "$STAGING_DIR" rev-parse HEAD)"
   log "sha mục tiêu: $new_sha"
 
-  (cd "$STAGING_DIR" && uv sync)
+  setup_venv
 
   ensure_web_built
 
@@ -257,7 +286,7 @@ main() {
   export QLKH_GIT_SHA="$new_sha"
   (
     cd "$STAGING_DIR"
-    nohup uv run python -m qlkh.devserver --host "$HOST" --port "$PORT" >>"$LOG_FILE" 2>&1 &
+    nohup "$VENV_DIR/bin/python" -m qlkh.devserver --host "$HOST" --port "$PORT" >>"$LOG_FILE" 2>&1 &
     echo $! >"$PID_FILE"
   )
   log "devserver khởi động, pid=$(cat "$PID_FILE") log=$LOG_FILE"
