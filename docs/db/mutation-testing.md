@@ -1,6 +1,6 @@
 # Mutation testing thật cho module schema/db (TCK-CR-RUNTIME-06)
 
-## Trạng thái: BỊ CHẶN — không có công cụ để tạo bằng chứng thật
+## Trạng thái: BỊ CHẶN — không có công cụ để tạo bằng chứng thật (xác nhận lại ở retry 1)
 
 Ticket yêu cầu (CR-RUNTIME-NFR-001):
 1. Lệnh chạy mutation testing ghi trong `docs/db` (tài liệu này).
@@ -42,6 +42,33 @@ Vì vậy: **không có cách nào trong phạm vi công cụ được cấp cho
 để tự tạo ra bằng chứng "mutation score thật, kèm output thật"** mà ticket yêu cầu. Đây là
 giới hạn năng lực công cụ, không phải suy đoán hay lười — đã thử `search` xác nhận không có
 gói mutation testing nào sẵn có trong repo/dependency lock trước khi kết luận.
+
+## Xác nhận lại ở retry 1 (2026-09-10)
+
+Ticket được giao lại lần 2 (`retry: 1`). Trước khi kết luận lại "bị chặn", đã kiểm tra
+lại từ đầu, không dựa vào kết luận cũ:
+
+- `search pattern="mutmut|cosmic-ray"` trên toàn repo: chỉ khớp trong chính tài liệu này
+  (do tự nó nhắc tới hai tên gói) — vẫn **không có** gói mutation testing nào trong
+  `requirements.lock`/`pyproject.toml`/CI config đọc được từ worktree.
+- `run test tests/schema`, `run lint`: cả hai **PASS** (exit=0) — code/test hiện có
+  không hồi quy, không có gì cần sửa trong phạm vi "chỉ báo cáo/tài liệu".
+- `git_status`: sạch — không có thay đổi dở dang từ lượt trước.
+- Bộ 4 lệnh cấp cho `run` (`git_diff`, `git_status`, `lint`, `test`) không đổi so với
+  lượt trước; không có đường nào để tự cài/chạy `mutmut` trong phạm vi công cụ hiện có.
+- `hint` đính kèm ticket lần này mô tả một root-cause về "redeploy REL-038 cùng
+  integration_sha đã tag+push qua REL-047/048" — nội dung đó khớp với một ticket khác
+  (loại "khảo sát/đóng nợ kỹ thuật do redeploy trùng sha", ví dụ TCK-ADRDEBT-03), **không
+  khớp** với nội dung/scope của TCK-CR-RUNTIME-06 (mutation testing thật ≥70%). Không áp
+  dụng hint đó để đóng ticket này — ghi nhận là ruling bên dưới thay vì tự suy diễn đóng
+  ticket theo một dữ kiện không liên quan.
+- Đối chiếu threat-model v1.49 mục 41: job `mutation` trong CI vẫn `continue-on-error:true`
+  và mutation score thật của module PII liên quan (`erasure_http.py`) vẫn chưa xác nhận —
+  đây là bằng chứng độc lập (từ security) xác nhận gap này **vẫn đang mở**, không phải đã
+  đóng ở lượt trước.
+
+Kết luận: trạng thái BỊ CHẶN không đổi vì lý do không đổi (giới hạn năng lực công cụ `run`).
+Không có việc gì mới để code trong phạm vi ticket này ở retry 1.
 
 ## Đề xuất người có năng lực làm nốt
 
