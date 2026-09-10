@@ -26,6 +26,14 @@
 // Ngưỡng chặn (threshold) ánh xạ trực tiếp NFR-004: p95 < 1000ms cho riêng
 // nhóm request bulkAttendance (tag `endpoint:bulk_attendance`), và tỉ lệ lỗi
 // http < 1%.
+//
+// SỬA (TCK-CR-RUNTIME-03, retry 1): entry field phải là `student_id`, KHÔNG
+// phải `subject_student_id` — khớp `AttendanceBulk.entries[].student_id`
+// trong api-contract v1.4.0 và `qlkh/application/attendance_service.py`
+// dòng 112 (`raw.get("student_id")`); bản trước gửi sai field sẽ luôn nhận
+// 422 (InvalidAttendanceInput: "student_id không được rỗng") từ mọi request
+// thật, khiến toàn bộ số đo p95 vô nghĩa (100% fail, không đo được tải thật
+// của đường ghi dữ liệu).
 
 import http from "k6/http";
 import { check, sleep } from "k6";
@@ -97,8 +105,10 @@ function login(vuId) {
 
 function randomEntries() {
   const statuses = ["present", "absent", "late", "excused"];
-  return STUDENT_IDS.map((subject_student_id) => ({
-    subject_student_id,
+  // Field phải là `student_id` — khớp AttendanceBulk trong api-contract
+  // v1.4.0 và qlkh/application/attendance_service.py (raw.get("student_id")).
+  return STUDENT_IDS.map((student_id) => ({
+    student_id,
     status: statuses[Math.floor(Math.random() * statuses.length)],
   }));
 }
