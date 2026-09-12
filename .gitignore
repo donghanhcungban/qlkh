@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# uv.lock KHÔNG dùng — requirements.lock là nguồn khoá phiên bản chính thức (ADR-0014)
+uv.lock
+
+# Node / frontend build
+node_modules/
+web/node_modules/
+web/dist/
+package-lock.json
+web/package-lock.json
+
+# Runtime / local state
+var/
+*.log
