@@ -120,9 +120,7 @@ class StudentHttpHandlers:
     def __init__(self, service: StudentService) -> None:
         self._service = service
 
-    def list_students(
-        self, ctx: SubjectContext, *, query: dict[str, str] | None = None
-    ) -> HttpResult:
+    def list_students(self, ctx: SubjectContext, *, query: dict[str, str] | None = None) -> HttpResult:
         query = query or {}
         cursor = query.get("cursor")
         raw_limit = query.get("limit")
@@ -160,9 +158,7 @@ class StudentHttpHandlers:
             return _problem(422, "unprocessable", "Unprocessable", str(exc))
         return HttpResult(status=201, body=_to_response_body(record))
 
-    def patch_student(
-        self, ctx: SubjectContext, student_id: str, raw_body: dict[str, Any]
-    ) -> HttpResult:
+    def patch_student(self, ctx: SubjectContext, student_id: str, raw_body: dict[str, Any]) -> HttpResult:
         unknown_fields = _validate_patch_schema(raw_body)
         if unknown_fields:
             # additionalProperties:false của StudentPatch — trường hoàn toàn lạ

@@ -77,10 +77,7 @@ def unverified_downloads_in_steps(workflow: dict[str, Any]) -> list[str]:
             if not urls or "verify_download.py" in script:
                 continue
             label = step.get("name") or f"step #{index}"
-            problems.extend(
-                f"{job_name}/{label}: {url} tải về nhưng không xác minh checksum (SD-09)"
-                for url in urls
-            )
+            problems.extend(f"{job_name}/{label}: {url} tải về nhưng không xác minh checksum (SD-09)" for url in urls)
     return problems
 
 

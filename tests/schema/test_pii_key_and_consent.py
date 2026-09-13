@@ -278,9 +278,7 @@ def test_check_role_code_enum_trong_0002():
 def test_check_relation_trong_parent_student():
     """parent_student.relation có CHECK IN (father, mother, guardian)."""
     body = " ".join(CORE_UP.split())
-    assert "relation IN ('father', 'mother', 'guardian')" in body, (
-        "parent_student.relation thiếu CHECK constraint"
-    )
+    assert "relation IN ('father', 'mother', 'guardian')" in body, "parent_student.relation thiếu CHECK constraint"
 
 
 def test_check_classes_name_unique_per_branch():

@@ -65,11 +65,7 @@ class InMemoryRateLimiter:
 
     def hit(self, key: str, now: datetime) -> int | None:
         window = self._windows.get(key)
-        if (
-            window is None
-            or window.window_started_at is None
-            or now - window.window_started_at >= self._policy.window
-        ):
+        if window is None or window.window_started_at is None or now - window.window_started_at >= self._policy.window:
             window = _Window(count=0, window_started_at=now)
         window.count += 1
         self._windows[key] = window
@@ -77,5 +73,10 @@ class InMemoryRateLimiter:
         self._sweep(keep=key)
         if window.count <= self._policy.limit:
             return None
-        remaining = window.window_started_at + self._policy.window - now
+        # window_started_at không thể None ở đây: nhánh if trên dòng 68 đảm bảo window
+        # vừa được tạo mới với window_started_at=now, hoặc là window cũ đã qua kiểm tra
+        # None/hết hạn — mypy không suy được qua reassignment nên khai rõ bằng assert.
+        started_at = window.window_started_at
+        assert started_at is not None
+        remaining = started_at + self._policy.window - now
         return max(1, int(remaining.total_seconds()))

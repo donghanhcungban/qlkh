@@ -152,9 +152,7 @@ def ctx_staff_b() -> SubjectContext:
 
 
 class TestEnrollPermission:
-    def test_giao_vien_khong_phu_trach_lop_bi_403(
-        self, service: ClassService, ctx_teacher_class1: SubjectContext
-    ):
+    def test_giao_vien_khong_phu_trach_lop_bi_403(self, service: ClassService, ctx_teacher_class1: SubjectContext):
         with pytest.raises(ClassPermissionDenied):
             service.enroll_student(ctx_teacher_class1, CLASS_2, STUDENT_A)
 
@@ -165,9 +163,7 @@ class TestEnrollPermission:
         assert record["class_id"] == CLASS_1
         assert record["student_id"] == STUDENT_A
 
-    def test_lop_ngoai_co_so_tra_404_khong_phai_403(
-        self, service: ClassService, ctx_staff_b: SubjectContext
-    ):
+    def test_lop_ngoai_co_so_tra_404_khong_phai_403(self, service: ClassService, ctx_staff_b: SubjectContext):
         """Lớp ở cơ sở khác (không thuộc phạm vi phiên) -> 404, không lộ tồn tại."""
         with pytest.raises(ClassNotFound):
             service.enroll_student(ctx_staff_b, CLASS_1, STUDENT_A)
@@ -189,9 +185,7 @@ class TestEnrolledAtServerGenerated:
         sig = inspect.signature(service.enroll_student)
         assert "enrolled_at" not in sig.parameters
 
-    def test_enrolled_at_dung_dong_ho_server(
-        self, service: ClassService, ctx_teacher_class1: SubjectContext
-    ):
+    def test_enrolled_at_dung_dong_ho_server(self, service: ClassService, ctx_teacher_class1: SubjectContext):
         record = service.enroll_student(ctx_teacher_class1, CLASS_1, STUDENT_A)
         assert record["enrolled_at"] == FIXED_NOW
 
@@ -202,16 +196,12 @@ class TestEnrolledAtServerGenerated:
 
 
 class TestEnrollmentConflict:
-    def test_ghi_danh_lai_hoc_vien_da_ghi_danh_409(
-        self, service: ClassService, ctx_teacher_class1: SubjectContext
-    ):
+    def test_ghi_danh_lai_hoc_vien_da_ghi_danh_409(self, service: ClassService, ctx_teacher_class1: SubjectContext):
         service.enroll_student(ctx_teacher_class1, CLASS_1, STUDENT_A)
         with pytest.raises(EnrollmentAlreadyExists):
             service.enroll_student(ctx_teacher_class1, CLASS_1, STUDENT_A)
 
-    def test_ghi_danh_lai_sau_khi_huy_khong_conflict(
-        self, service: ClassService, ctx_teacher_class1: SubjectContext
-    ):
+    def test_ghi_danh_lai_sau_khi_huy_khong_conflict(self, service: ClassService, ctx_teacher_class1: SubjectContext):
         service.enroll_student(ctx_teacher_class1, CLASS_1, STUDENT_A)
         service.unenroll_student(ctx_teacher_class1, CLASS_1, STUDENT_A)
         record = service.enroll_student(ctx_teacher_class1, CLASS_1, STUDENT_A)
@@ -232,9 +222,7 @@ class TestCreateClass:
         with pytest.raises(InvalidClassInput):
             service.create_class(ctx_staff_a, name="   ")
 
-    def test_giao_vien_khong_duoc_tao_lop(
-        self, service: ClassService, ctx_teacher_class1: SubjectContext
-    ):
+    def test_giao_vien_khong_duoc_tao_lop(self, service: ClassService, ctx_teacher_class1: SubjectContext):
         with pytest.raises(ClassPermissionDenied):
             service.create_class(ctx_teacher_class1, name="Lớp X")
 
@@ -250,9 +238,7 @@ class TestListClassesPagination:
 
 
 class TestUnenrollIdempotent:
-    def test_huy_ghi_danh_khong_ton_tai_khong_loi(
-        self, service: ClassService, ctx_teacher_class1: SubjectContext
-    ):
+    def test_huy_ghi_danh_khong_ton_tai_khong_loi(self, service: ClassService, ctx_teacher_class1: SubjectContext):
         # Không raise gì — idempotent, coi như đã hủy từ trước.
         service.unenroll_student(ctx_teacher_class1, CLASS_1, STUDENT_B)
 

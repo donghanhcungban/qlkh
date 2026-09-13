@@ -37,12 +37,8 @@ _CREATE_TABLE = re.compile(r"CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?(\w+)", re.
 _CREATE_INDEX = re.compile(r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(IF\s+NOT\s+EXISTS\s+)?(\w+)", re.IGNORECASE)
 _DROP_TABLE = re.compile(r"DROP\s+TABLE\s+(IF\s+EXISTS\s+)?(\w+)", re.IGNORECASE)
 _DROP_INDEX = re.compile(r"DROP\s+INDEX\s+(IF\s+EXISTS\s+)?(\w+)", re.IGNORECASE)
-_ADD_COLUMN = re.compile(
-    r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(IF\s+NOT\s+EXISTS\s+)?(\w+)", re.IGNORECASE
-)
-_DROP_COLUMN = re.compile(
-    r"ALTER\s+TABLE\s+(\w+)\s+DROP\s+COLUMN\s+(IF\s+EXISTS\s+)?(\w+)", re.IGNORECASE
-)
+_ADD_COLUMN = re.compile(r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(IF\s+NOT\s+EXISTS\s+)?(\w+)", re.IGNORECASE)
+_DROP_COLUMN = re.compile(r"ALTER\s+TABLE\s+(\w+)\s+DROP\s+COLUMN\s+(IF\s+EXISTS\s+)?(\w+)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -157,9 +153,7 @@ def check_pii_metadata(metadata: dict, columns_by_table: dict[str, set[str]]) ->
                     violations.append(Violation(f"{table}.{column} mã hóa nhưng thiếu '{field}'"))
             key_column = entry.get("key_version_column")
             if key_column and key_column not in table_columns:
-                violations.append(
-                    Violation(f"{table}.{column} trỏ tới cột phiên bản khóa không tồn tại: {key_column}")
-                )
+                violations.append(Violation(f"{table}.{column} trỏ tới cột phiên bản khóa không tồn tại: {key_column}"))
     return violations
 
 

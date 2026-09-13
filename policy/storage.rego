@@ -74,11 +74,13 @@ deny[msg] {
 	msg := sprintf("%s.%s: principal '*' bị cấm (least privilege)", [type, name])
 }
 
-# Fail-closed: tài nguyên lưu dữ liệu phải khai báo tag data-class.
+# Fail-closed: tài nguyên lưu dữ liệu phải khai báo tag data-class — tag là
+# NGUỒN SỰ THẬT DUY NHẤT (dòng 6-8), nên soi thẳng tag, không soi data_class(body):
+# hàm đó rơi về trường cũ khi thiếu tag, sẽ lầm "chỉ có trường cũ" thành "đã khai báo".
 deny[msg] {
 	[type, name, body] := resources[_]
 	storage_types[type]
-	data_class(body) == "unclassified"
+	not body.tags["data-class"]
 	msg := sprintf("%s.%s: thiếu tag 'data-class' (fail-closed, SD-10)", [type, name])
 }
 

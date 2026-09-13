@@ -3,40 +3,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 import pytest
 
 from qlkh.application.erasure_http import ErasureHttpHandlers
 from qlkh.application.erasure_service import ErasureRequestService
 from qlkh.domain.subject_context import SubjectContext
+from qlkh.infrastructure.erasure_memory import InMemoryErasureRepository as FakeRepo
 
 BRANCH_A = "aaaaaaaa-0000-0000-0000-000000000001"
 STUDENT_SON = "aaaaaaaa-0000-0000-0000-000000000010"
 STUDENT_OTHER = "bbbbbbbb-0000-0000-0000-000000000020"
 FIXED_NOW = datetime(2026, 9, 6, tzinfo=UTC)
-
-
-class FakeRepo:
-    def __init__(self, students: dict[str, dict[str, Any]]) -> None:
-        self._students = students
-        self._seq = 0
-
-    def get_student_ref(self, ctx, student_id):
-        record = self._students.get(student_id)
-        if record is None or not ctx.can_access_student(student_id, record["branch_id"]):
-            return None
-        return record
-
-    def create(self, ctx, *, subject_student_id, requested_at, due_at):
-        self._seq += 1
-        return {
-            "id": f"erasure-{self._seq}",
-            "subject_student_id": subject_student_id,
-            "requested_at": requested_at.isoformat(),
-            "due_at": due_at.isoformat(),
-            "status": "pending",
-        }
 
 
 class NullAudit:

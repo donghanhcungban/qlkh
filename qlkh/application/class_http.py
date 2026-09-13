@@ -70,9 +70,7 @@ class ClassHttpHandlers:
     def __init__(self, service: ClassService) -> None:
         self._service = service
 
-    def list_classes(
-        self, ctx: SubjectContext, *, query: dict[str, str] | None = None
-    ) -> HttpResult:
+    def list_classes(self, ctx: SubjectContext, *, query: dict[str, str] | None = None) -> HttpResult:
         query = query or {}
         cursor = query.get("cursor")
         raw_limit = query.get("limit")
@@ -102,9 +100,7 @@ class ClassHttpHandlers:
             return _problem(403, "forbidden", "Forbidden")
         return HttpResult(status=201, body=_to_response_body(record))
 
-    def enroll_student(
-        self, ctx: SubjectContext, class_id: str, raw_body: dict[str, Any]
-    ) -> HttpResult:
+    def enroll_student(self, ctx: SubjectContext, class_id: str, raw_body: dict[str, Any]) -> HttpResult:
         student_id = raw_body.get("student_id", "")
         try:
             record = self._service.enroll_student(ctx, class_id, student_id)
@@ -118,9 +114,7 @@ class ClassHttpHandlers:
             return _problem(409, "conflict", "Conflict", str(exc))
         return HttpResult(status=201, body=_to_response_body(record))
 
-    def unenroll_student(
-        self, ctx: SubjectContext, class_id: str, student_id: str
-    ) -> HttpResult:
+    def unenroll_student(self, ctx: SubjectContext, class_id: str, student_id: str) -> HttpResult:
         try:
             self._service.unenroll_student(ctx, class_id, student_id)
         except ClassNotFound:

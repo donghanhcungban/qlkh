@@ -194,9 +194,7 @@ def test_step_tai_ve_khong_xac_minh_bi_bat():
 
 
 def test_step_co_verify_thi_dat():
-    workflow = _steps(
-        {"run": "curl -O https://example.com/x.tar.gz\npython tools/verify_download.py x.tar.gz u"}
-    )
+    workflow = _steps({"run": "curl -O https://example.com/x.tar.gz\npython tools/verify_download.py x.tar.gz u"})
     assert unverified_downloads_in_steps(workflow) == []
 
 

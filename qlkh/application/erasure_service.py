@@ -32,9 +32,7 @@ class AuditSink(Protocol):
 class ErasureRequestRepository(Protocol):
     """Port bắt buộc ngữ cảnh chủ thể (P3, ADR-004)."""
 
-    def get_student_ref(
-        self, ctx: SubjectContext, student_id: str
-    ) -> dict[str, Any] | None:
+    def get_student_ref(self, ctx: SubjectContext, student_id: str) -> dict[str, Any] | None:
         """Trả thông tin tối thiểu (id, branch_id) nếu ctx CÓ quan hệ với học
         viên này; None nếu không tồn tại HOẶC ngoài phạm vi ctx."""
         ...
@@ -74,9 +72,7 @@ class ErasureRequestService:
         self._audit = audit
         self._now = now or (lambda: datetime.now(UTC))
 
-    def create_erasure_request(
-        self, ctx: SubjectContext, *, subject_student_id: str
-    ) -> dict[str, Any]:
+    def create_erasure_request(self, ctx: SubjectContext, *, subject_student_id: str) -> dict[str, Any]:
         if not subject_student_id or not str(subject_student_id).strip():
             raise InvalidErasureInput("subject_student_id không được rỗng")
 

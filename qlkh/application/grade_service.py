@@ -106,9 +106,7 @@ class GradeService:
             raise ClassNotFound(class_id)
         if not ctx.can_access_class(class_id, record["branch_id"]):
             # Trong cơ sở nhưng không phụ trách lớp này -> 403.
-            raise ClassPermissionDenied(
-                f"user {ctx.user_id} (role={ctx.role}) không phụ trách lớp {class_id}"
-            )
+            raise ClassPermissionDenied(f"user {ctx.user_id} (role={ctx.role}) không phụ trách lớp {class_id}")
         return record
 
     # ------------------------------------------------------------------ #
@@ -120,7 +118,7 @@ class GradeService:
         class_id: str,
         *,
         student_id: str,
-        score: float,
+        score: object,
         publish: bool = False,
         reason: str | None = None,
     ) -> dict[str, Any]:
@@ -233,7 +231,6 @@ class GradeService:
         records = self._history.list_for_grade(ctx, grade_id)
         if records is None:
             raise ClassPermissionDenied(
-                f"user {ctx.user_id} (role={ctx.role}) không có quyền xem lịch sử "
-                f"của điểm {grade_id}"
+                f"user {ctx.user_id} (role={ctx.role}) không có quyền xem lịch sử của điểm {grade_id}"
             )
         return records

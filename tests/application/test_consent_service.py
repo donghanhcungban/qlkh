@@ -77,11 +77,7 @@ class FakeConsentRepo:
 
     def get_active_consent(self, ctx, student_id, purpose):
         for r in self._consents.values():
-            if (
-                r["student_id"] == student_id
-                and r["purpose"] == purpose
-                and r["status"] == "granted"
-            ):
+            if r["student_id"] == student_id and r["purpose"] == purpose and r["status"] == "granted":
                 return dict(r)
         return None
 
@@ -208,9 +204,7 @@ def test_g3_processing_denied_after_revoke_and_audited():
     service.revoke_consent(ctx, created["id"])
 
     with pytest.raises(ConsentWithdrawn):
-        service.assert_purpose_granted(
-            ctx, student_id=STUDENT_SON, purpose="photo_publication"
-        )
+        service.assert_purpose_granted(ctx, student_id=STUDENT_SON, purpose="photo_publication")
 
     events = [e for e, _f in audit.events]
     assert "consent_revoked" in events
@@ -237,9 +231,7 @@ def test_g3_processing_denied_when_never_granted():
     ctx = _parent_ctx()
 
     with pytest.raises(ConsentWithdrawn):
-        service.assert_purpose_granted(
-            ctx, student_id=STUDENT_SON, purpose="notification"
-        )
+        service.assert_purpose_granted(ctx, student_id=STUDENT_SON, purpose="notification")
     assert any(e == "consent_processing_denied" for e, _f in audit.events)
 
 

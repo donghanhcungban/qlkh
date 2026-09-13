@@ -163,9 +163,7 @@ class AttendanceHttpHandlers:
             except (TypeError, ValueError):
                 return _problem(422, "unprocessable", "Unprocessable", "limit phải là số nguyên")
         try:
-            data, next_cursor = self._service.list_attendance(
-                ctx, class_id, cursor=cursor, limit=limit
-            )
+            data, next_cursor = self._service.list_attendance(ctx, class_id, cursor=cursor, limit=limit)
         except InvalidPagination as exc:
             return _problem(422, "unprocessable", "Unprocessable", str(exc))
         except ClassNotFound:

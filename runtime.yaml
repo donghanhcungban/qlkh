@@ -1,0 +1,28 @@
+# runtime.yaml — Khai báo runtime CHÍNH THỨC của QLKH devserver.
+#
+# Đọc bởi orchestrator (quy ước ADR-0031) và bởi tools/run_smoke.sh — nguồn
+# sự thật DUY NHẤT cho lệnh khởi động, cổng, đường health-check. Trước file
+# này, orchestrator phải suy luận từ README bằng ngôn ngữ tự nhiên, kết quả
+# là evidence.run/smoke luôn unverified suốt 11 lần liên tiếp (REL-027..038,
+# xem docs/QLKH/changelog/CHANGELOG.md).
+#
+# Nguồn quyết định: architecture/QLKH/adr/ADR-0015-runtime-declaration.md
+# (CR-RUNTIME-NFR-001 mục 1), TCK-CR-RUNTIME-01.
+#
+# Định dạng CỐ Ý phẳng (flat "key: value", một dòng, không lồng cấu trúc) —
+# để tools/run_smoke.sh đọc bằng grep/cut thuần, không cần thêm PyYAML vào
+# requirements.lock chỉ để phục vụ orchestrator/CI.
+#
+# QUAN TRỌNG: các giá trị dưới đây PHẢI khớp:
+#   - port / health_path: infra/staging/wsl/deploy.sh, infra/staging/wsl/smoke.sh
+#     (mặc định QLKH_STAGING_PORT=8080), qlkh/devserver/__main__.py (--port mặc
+#     định 8080), qlkh/devserver/health.py (route /healthz).
+# Đổi một nơi mà không đổi các nơi còn lại là bug — cập nhật cả bốn cùng lúc.
+
+service: qlkh-devserver
+project_id: QLKH
+start_command: python -m qlkh.devserver --host 0.0.0.0 --port 8080
+port: 8080
+health_path: /healthz
+health_timeout_seconds: 30
+smoke_command: infra/staging/wsl/smoke.sh

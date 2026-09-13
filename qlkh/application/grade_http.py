@@ -65,9 +65,7 @@ class GradeHttpHandlers:
     def __init__(self, service: GradeService) -> None:
         self._service = service
 
-    def upsert_grade(
-        self, ctx: SubjectContext, class_id: str, raw_body: dict[str, Any]
-    ) -> HttpResult:
+    def upsert_grade(self, ctx: SubjectContext, class_id: str, raw_body: dict[str, Any]) -> HttpResult:
         student_id = raw_body.get("student_id", "")
         score = raw_body.get("score")
         publish = bool(raw_body.get("publish", False))

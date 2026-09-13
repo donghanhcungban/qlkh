@@ -48,11 +48,7 @@ class FakeStudentRepo:
     def list_for_branch(
         self, ctx: SubjectContext, *, cursor: str | None = None, limit: int = 50
     ) -> tuple[list[dict[str, Any]], str | None]:
-        visible = [
-            s
-            for s in self._students.values()
-            if ctx.can_access_branch(s["branch_id"])
-        ]
+        visible = [s for s in self._students.values() if ctx.can_access_branch(s["branch_id"])]
         visible.sort(key=lambda s: s["id"])
         page = visible[:limit]
         next_cursor = page[-1]["id"] if len(visible) > limit else None
@@ -136,9 +132,7 @@ def ctx_staff_q1() -> SubjectContext:
 
 @pytest.fixture()
 def ctx_staff_thuduc() -> SubjectContext:
-    return SubjectContext(
-        user_id="staff-thuduc", role="staff", allowed_branch_ids=(BRANCH_THUDUC,)
-    )
+    return SubjectContext(user_id="staff-thuduc", role="staff", allowed_branch_ids=(BRANCH_THUDUC,))
 
 
 # ---------------------------------------------------------------------------
@@ -147,12 +141,8 @@ def ctx_staff_thuduc() -> SubjectContext:
 
 
 class TestPatchMassAssignment:
-    def test_role_bi_bo_qua_va_ghi_audit(
-        self, service: StudentService, ctx_staff_q1: SubjectContext, audit: FakeAudit
-    ):
-        result = service.patch_student(
-            ctx_staff_q1, STUDENT_A, {"full_name": "Bé A2", "role": "admin"}
-        )
+    def test_role_bi_bo_qua_va_ghi_audit(self, service: StudentService, ctx_staff_q1: SubjectContext, audit: FakeAudit):
+        result = service.patch_student(ctx_staff_q1, STUDENT_A, {"full_name": "Bé A2", "role": "admin"})
         assert result["full_name"] == "Bé A2"
         assert "role" not in result or result.get("role") != "admin"
         events = [e for e in audit.events if e[0] == "student.patch.field_ignored"]
@@ -163,9 +153,7 @@ class TestPatchMassAssignment:
     def test_branch_id_bi_bo_qua_va_ghi_audit(
         self, service: StudentService, ctx_staff_q1: SubjectContext, audit: FakeAudit
     ):
-        result = service.patch_student(
-            ctx_staff_q1, STUDENT_A, {"branch_id": BRANCH_THUDUC}
-        )
+        result = service.patch_student(ctx_staff_q1, STUDENT_A, {"branch_id": BRANCH_THUDUC})
         assert result["branch_id"] == BRANCH_Q1  # không đổi
         events = [e for e in audit.events if e[0] == "student.patch.field_ignored"]
         assert events[0][1]["rejected_fields"] == ["branch_id"]
@@ -183,9 +171,7 @@ class TestPatchMassAssignment:
         service.patch_student(ctx_staff_q1, STUDENT_A, {"full_name": "Bé A3"})
         assert audit.events == []
 
-    def test_patch_khong_thay_ctx_khac_co_so_tra_404(
-        self, service: StudentService, ctx_staff_q1: SubjectContext
-    ):
+    def test_patch_khong_thay_ctx_khac_co_so_tra_404(self, service: StudentService, ctx_staff_q1: SubjectContext):
         with pytest.raises(StudentNotFound):
             service.patch_student(ctx_staff_q1, STUDENT_B, {"full_name": "Hack"})
 
@@ -196,16 +182,12 @@ class TestPatchMassAssignment:
 
 
 class TestListScopedByBranch:
-    def test_giao_vu_q1_chi_thay_hoc_vien_q1(
-        self, service: StudentService, ctx_staff_q1: SubjectContext
-    ):
+    def test_giao_vu_q1_chi_thay_hoc_vien_q1(self, service: StudentService, ctx_staff_q1: SubjectContext):
         data, _ = service.list_students(ctx_staff_q1)
         ids = [s["id"] for s in data]
         assert ids == [STUDENT_A]
 
-    def test_giao_vu_thuduc_chi_thay_hoc_vien_thuduc(
-        self, service: StudentService, ctx_staff_thuduc: SubjectContext
-    ):
+    def test_giao_vu_thuduc_chi_thay_hoc_vien_thuduc(self, service: StudentService, ctx_staff_thuduc: SubjectContext):
         data, _ = service.list_students(ctx_staff_thuduc)
         ids = [s["id"] for s in data]
         assert ids == [STUDENT_B]
@@ -230,28 +212,20 @@ class TestListScopedByBranch:
 
 
 class TestPagination:
-    def test_khong_truyen_limit_dung_mac_dinh_50(
-        self, service: StudentService, ctx_staff_q1: SubjectContext
-    ):
+    def test_khong_truyen_limit_dung_mac_dinh_50(self, service: StudentService, ctx_staff_q1: SubjectContext):
         data, cursor = service.list_students(ctx_staff_q1, cursor=None, limit=None)
         assert len(data) <= 50
         assert cursor is None or isinstance(cursor, str)
 
-    def test_limit_qua_200_bi_tu_choi(
-        self, service: StudentService, ctx_staff_q1: SubjectContext
-    ):
+    def test_limit_qua_200_bi_tu_choi(self, service: StudentService, ctx_staff_q1: SubjectContext):
         with pytest.raises(InvalidPagination):
             service.list_students(ctx_staff_q1, limit=201)
 
-    def test_limit_am_bi_tu_choi(
-        self, service: StudentService, ctx_staff_q1: SubjectContext
-    ):
+    def test_limit_am_bi_tu_choi(self, service: StudentService, ctx_staff_q1: SubjectContext):
         with pytest.raises(InvalidPagination):
             service.list_students(ctx_staff_q1, limit=0)
 
-    def test_limit_200_duoc_chap_nhan(
-        self, service: StudentService, ctx_staff_q1: SubjectContext
-    ):
+    def test_limit_200_duoc_chap_nhan(self, service: StudentService, ctx_staff_q1: SubjectContext):
         data, _ = service.list_students(ctx_staff_q1, limit=200)
         assert isinstance(data, list)
 
@@ -274,22 +248,14 @@ class TestPagination:
 
 
 class TestCreateStudent:
-    def test_tao_hoc_vien_gan_branch_tu_ctx(
-        self, service: StudentService, ctx_staff_q1: SubjectContext
-    ):
-        record = service.create_student(
-            ctx_staff_q1, full_name="Bé Mới", date_of_birth="2018-01-01"
-        )
+    def test_tao_hoc_vien_gan_branch_tu_ctx(self, service: StudentService, ctx_staff_q1: SubjectContext):
+        record = service.create_student(ctx_staff_q1, full_name="Bé Mới", date_of_birth="2018-01-01")
         assert record["branch_id"] == BRANCH_Q1
 
-    def test_full_name_rong_bi_tu_choi(
-        self, service: StudentService, ctx_staff_q1: SubjectContext
-    ):
+    def test_full_name_rong_bi_tu_choi(self, service: StudentService, ctx_staff_q1: SubjectContext):
         with pytest.raises(InvalidStudentInput):
             service.create_student(ctx_staff_q1, full_name="  ", date_of_birth="2018-01-01")
 
-    def test_date_of_birth_rong_bi_tu_choi(
-        self, service: StudentService, ctx_staff_q1: SubjectContext
-    ):
+    def test_date_of_birth_rong_bi_tu_choi(self, service: StudentService, ctx_staff_q1: SubjectContext):
         with pytest.raises(InvalidStudentInput):
             service.create_student(ctx_staff_q1, full_name="Bé Mới", date_of_birth="")
