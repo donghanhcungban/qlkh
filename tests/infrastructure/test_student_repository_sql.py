@@ -56,9 +56,7 @@ class RecordingSqlConnection:
             *rest, limit = params
             branch_params = tuple(rest)
             visible = [
-                r
-                for r in self._rows.values()
-                if is_admin or not branch_params or r["branch_id"] in branch_params
+                r for r in self._rows.values() if is_admin or not branch_params or r["branch_id"] in branch_params
             ]
             visible.sort(key=lambda r: r["id"])
             return [dict(r) for r in visible[: int(limit)]]
@@ -165,9 +163,7 @@ class TestLocGiuaCacCoSo:
 
 class TestCreateGanBranchTuCtx:
     def test_create_gan_branch_id_tu_ctx_khong_nhan_tham_so(self, repo):
-        record = repo.create(
-            ctx_staff(BRANCH_Q1), full_name="Bé Mới", date_of_birth="2020-01-01"
-        )
+        record = repo.create(ctx_staff(BRANCH_Q1), full_name="Bé Mới", date_of_birth="2020-01-01")
         assert record["branch_id"] == BRANCH_Q1
 
     def test_create_khong_co_tham_so_branch_id_trong_chu_ky(self):

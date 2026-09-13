@@ -168,15 +168,11 @@ def make_service(classes=None, grades=None, history=None, notifier=None):
     audit = RecordingAudit()
     history = history if history is not None else FakeGradeHistoryRepo()
     notifier = notifier if notifier is not None else RecordingNotifier()
-    service = GradeService(
-        classes or make_classes(), grades or make_students(), audit, history, notifier
-    )
+    service = GradeService(classes or make_classes(), grades or make_students(), audit, history, notifier)
     return service, audit, history, notifier
 
 
-def teacher_ctx(
-    related_class_ids=(CLASS_1,), related_student_ids=(STUDENT_SON,)
-) -> SubjectContext:
+def teacher_ctx(related_class_ids=(CLASS_1,), related_student_ids=(STUDENT_SON,)) -> SubjectContext:
     # `related_student_ids` mô phỏng dữ liệu nạp từ enrollments của lớp giáo
     # viên phụ trách khi build context thật (docstring SubjectContext).
     return SubjectContext(
@@ -244,9 +240,7 @@ def test_teacher_assigned_to_class_can_post_grade():
 
 def test_class_not_found_or_out_of_branch_is_404():
     service, _, _, _ = make_service()
-    unknown_branch_ctx = SubjectContext(
-        user_id="teacher-2", role="teacher", allowed_branch_ids=(BRANCH_B,)
-    )
+    unknown_branch_ctx = SubjectContext(user_id="teacher-2", role="teacher", allowed_branch_ids=(BRANCH_B,))
 
     with pytest.raises(ClassNotFound):
         service.upsert_grade(unknown_branch_ctx, CLASS_1, student_id=STUDENT_SON, score=7)
@@ -312,9 +306,7 @@ def test_editing_published_grade_with_reason_succeeds():
     service, _, _, _ = make_service(grades=grades)
     ctx = teacher_ctx()
 
-    record = service.upsert_grade(
-        ctx, CLASS_1, student_id=STUDENT_SON, score=7.0, reason="Sửa nhầm điểm"
-    )
+    record = service.upsert_grade(ctx, CLASS_1, student_id=STUDENT_SON, score=7.0, reason="Sửa nhầm điểm")
 
     assert record["score"] == 7.0
 
@@ -356,9 +348,7 @@ def test_h2_editing_grade_appends_history_entry_with_old_new_actor():
     service, _, history, _ = make_service(grades=grades)
     ctx = teacher_ctx()
 
-    record = service.upsert_grade(
-        ctx, CLASS_1, student_id=STUDENT_SON, score=7.0, reason="Sửa nhầm điểm"
-    )
+    record = service.upsert_grade(ctx, CLASS_1, student_id=STUDENT_SON, score=7.0, reason="Sửa nhầm điểm")
 
     entries = history.list_for_grade(ctx, record["id"])
     assert len(entries) == 1
@@ -404,9 +394,7 @@ def test_editing_published_grade_notifies_parent():
     service, _, _, notifier = make_service(grades=grades)
     ctx = teacher_ctx()
 
-    service.upsert_grade(
-        ctx, CLASS_1, student_id=STUDENT_SON, score=7.0, reason="Sửa nhầm điểm"
-    )
+    service.upsert_grade(ctx, CLASS_1, student_id=STUDENT_SON, score=7.0, reason="Sửa nhầm điểm")
 
     assert len(notifier.calls) == 1
     call = notifier.calls[0]
@@ -433,9 +421,7 @@ def test_teacher_can_list_grade_history():
     grades.seed_grade(CLASS_1, STUDENT_SON, score=9.0, published=True)
     service, _, history, _ = make_service(grades=grades)
     ctx = teacher_ctx()
-    record = service.upsert_grade(
-        ctx, CLASS_1, student_id=STUDENT_SON, score=7.0, reason="Sửa nhầm điểm"
-    )
+    record = service.upsert_grade(ctx, CLASS_1, student_id=STUDENT_SON, score=7.0, reason="Sửa nhầm điểm")
 
     entries = service.list_grade_history(ctx, record["id"])
 

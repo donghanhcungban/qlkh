@@ -108,9 +108,7 @@ class NullNotifier:
 
 
 def make_handlers() -> GradeHttpHandlers:
-    service = GradeService(
-        FakeClassRepo(), FakeGradeRepo(), NullAudit(), FakeGradeHistoryRepo(), NullNotifier()
-    )
+    service = GradeService(FakeClassRepo(), FakeGradeRepo(), NullAudit(), FakeGradeHistoryRepo(), NullNotifier())
     return GradeHttpHandlers(service)
 
 
@@ -207,9 +205,7 @@ def test_get_grade_history_returns_entries_for_teacher():
     handlers = make_handlers()
     teacher = teacher_ctx()
     handlers.upsert_grade(teacher, CLASS_1, {"student_id": STUDENT_SON, "score": 9, "publish": True})
-    handlers.upsert_grade(
-        teacher, CLASS_1, {"student_id": STUDENT_SON, "score": 7, "reason": "Sửa nhầm"}
-    )
+    handlers.upsert_grade(teacher, CLASS_1, {"student_id": STUDENT_SON, "score": 7, "reason": "Sửa nhầm"})
 
     result = handlers.list_grade_history(teacher, "grade-1")
 

@@ -116,9 +116,7 @@ def audit() -> FakeAudit:
 
 @pytest.fixture()
 def service(class_repo, attendance_repo, audit) -> AttendanceService:
-    return AttendanceService(
-        classes=class_repo, attendance=attendance_repo, audit=audit, clock=lambda: FIXED_NOW
-    )
+    return AttendanceService(classes=class_repo, attendance=attendance_repo, audit=audit, clock=lambda: FIXED_NOW)
 
 
 @pytest.fixture()
@@ -134,30 +132,20 @@ def ctx_teacher_class1() -> SubjectContext:
 class TestBulkAttendancePermission:
     def test_giao_vien_khong_phu_trach_lop_403(self, service, ctx_teacher_class1):
         with pytest.raises(ClassPermissionDenied):
-            service.bulk_attendance(
-                ctx_teacher_class1, CLASS_2, [{"student_id": STUDENT_A, "status": "present"}]
-            )
+            service.bulk_attendance(ctx_teacher_class1, CLASS_2, [{"student_id": STUDENT_A, "status": "present"}])
 
     def test_lop_ngoai_pham_vi_404(self, service):
         other_ctx = SubjectContext(user_id="staff-2", role="staff", allowed_branch_ids=(BRANCH_B,))
         with pytest.raises(ClassNotFound):
-            service.bulk_attendance(
-                other_ctx, CLASS_1, [{"student_id": STUDENT_A, "status": "present"}]
-            )
+            service.bulk_attendance(other_ctx, CLASS_1, [{"student_id": STUDENT_A, "status": "present"}])
 
 
 class TestBulkAttendanceServerClock:
-    def test_attendance_at_luon_la_dong_ho_server(
-        self, service, ctx_teacher_class1, attendance_repo
-    ):
-        records = service.bulk_attendance(
-            ctx_teacher_class1, CLASS_1, [{"student_id": STUDENT_A, "status": "present"}]
-        )
+    def test_attendance_at_luon_la_dong_ho_server(self, service, ctx_teacher_class1, attendance_repo):
+        records = service.bulk_attendance(ctx_teacher_class1, CLASS_1, [{"student_id": STUDENT_A, "status": "present"}])
         assert records[0]["attendance_at"] == FIXED_NOW
 
-    def test_client_gui_attendance_at_lui_ngay_bi_bo_qua(
-        self, service, ctx_teacher_class1, attendance_repo
-    ):
+    def test_client_gui_attendance_at_lui_ngay_bi_bo_qua(self, service, ctx_teacher_class1, attendance_repo):
         """G1: entries kèm attendance_at lùi ngày -> giá trị đó không có đường
         nào lọt tới bản ghi; repo chỉ nhận attendance_at do service tính."""
         records = service.bulk_attendance(
@@ -200,9 +188,7 @@ class TestBulkAttendanceValidation:
 
     def test_status_khong_hop_le_422(self, service, ctx_teacher_class1):
         with pytest.raises(InvalidAttendanceInput):
-            service.bulk_attendance(
-                ctx_teacher_class1, CLASS_1, [{"student_id": STUDENT_A, "status": "unknown"}]
-            )
+            service.bulk_attendance(ctx_teacher_class1, CLASS_1, [{"student_id": STUDENT_A, "status": "unknown"}])
 
     def test_thieu_student_id_422(self, service, ctx_teacher_class1):
         with pytest.raises(InvalidAttendanceInput):
@@ -215,9 +201,7 @@ class TestListAttendance:
             service.list_attendance(ctx_teacher_class1, CLASS_2)
 
     def test_liet_ke_thanh_cong(self, service, ctx_teacher_class1):
-        service.bulk_attendance(
-            ctx_teacher_class1, CLASS_1, [{"student_id": STUDENT_A, "status": "present"}]
-        )
+        service.bulk_attendance(ctx_teacher_class1, CLASS_1, [{"student_id": STUDENT_A, "status": "present"}])
         data, next_cursor = service.list_attendance(ctx_teacher_class1, CLASS_1)
         assert len(data) == 1
         assert next_cursor is None

@@ -95,18 +95,12 @@ class SubjectContext:
         repository dùng hàm này và bắt AccessDenied → trả None / raise NotFound.
         """
         if not self.can_access_student(student_id, student_branch_id):
-            raise AccessDenied(
-                f"user {self.user_id} (role={self.role}) "
-                f"không có quyền truy cập student {student_id}"
-            )
+            raise AccessDenied(f"user {self.user_id} (role={self.role}) không có quyền truy cập student {student_id}")
 
     def assert_branch_access(self, branch_id: str) -> None:
         """Ném AccessDenied nếu không được phép truy cập branch này."""
         if not self.can_access_branch(branch_id):
-            raise AccessDenied(
-                f"user {self.user_id} (role={self.role}) "
-                f"không có quyền truy cập branch {branch_id}"
-            )
+            raise AccessDenied(f"user {self.user_id} (role={self.role}) không có quyền truy cập branch {branch_id}")
 
 
 class AccessDenied(Exception):

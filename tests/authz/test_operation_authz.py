@@ -106,20 +106,12 @@ def test_authz_liststudents_chi_tra_hoc_vien_trong_branch_cua_phien(
     ctx_staff_branch_b: SubjectContext,
 ):
     """listStudents: staff cơ sở B không thấy học viên cơ sở A (T-02)."""
-    visible = [
-        s["id"]
-        for s in STUDENTS.values()
-        if ctx_staff_branch_b.can_access_student(s["id"], s["branch_id"])
-    ]
+    visible = [s["id"] for s in STUDENTS.values() if ctx_staff_branch_b.can_access_student(s["id"], s["branch_id"])]
     assert visible == []
 
 
 def test_authz_liststudents_phu_huynh_chi_thay_con_minh(ctx_parent_a: SubjectContext):
-    visible = [
-        s["id"]
-        for s in STUDENTS.values()
-        if ctx_parent_a.can_access_student(s["id"], s["branch_id"])
-    ]
+    visible = [s["id"] for s in STUDENTS.values() if ctx_parent_a.can_access_student(s["id"], s["branch_id"])]
     assert visible == [STUDENT_X]
 
 
@@ -216,9 +208,7 @@ def test_authz_bulkattendance_bo_qua_hoc_vien_ngoai_pham_vi(ctx_teacher: Subject
     """Mục nào trỏ tới học viên ngoài lớp phụ trách đều bị loại trước khi ghi."""
     entries = [{"student_id": STUDENT_X}, {"student_id": STUDENT_Y}]
     accepted = [
-        e
-        for e in entries
-        if ctx_teacher.can_access_student(e["student_id"], STUDENTS[e["student_id"]]["branch_id"])
+        e for e in entries if ctx_teacher.can_access_student(e["student_id"], STUDENTS[e["student_id"]]["branch_id"])
     ]
     assert [e["student_id"] for e in accepted] == [STUDENT_X]
 

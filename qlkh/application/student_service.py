@@ -85,9 +85,7 @@ class StudentService:
         """
         effective_limit = DEFAULT_LIMIT if limit is None else limit
         if effective_limit < 1 or effective_limit > MAX_LIMIT:
-            raise InvalidPagination(
-                f"limit phải trong [1, {MAX_LIMIT}], nhận {effective_limit}"
-            )
+            raise InvalidPagination(f"limit phải trong [1, {MAX_LIMIT}], nhận {effective_limit}")
         return self._repo.list_for_branch(ctx, cursor=cursor, limit=effective_limit)
 
     # ------------------------------------------------------------------ #

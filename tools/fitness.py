@@ -84,9 +84,7 @@ def check_package(package_root: Path) -> list[Violation]:
         for module, lineno in _imported_roots(tree):
             root = module.split(".")[0]
             if layer == "domain" and root in FORBIDDEN_IN_DOMAIN:
-                violations.append(
-                    Violation(rel, lineno, f"domain không được import framework/ORM/HTTP: '{module}'")
-                )
+                violations.append(Violation(rel, lineno, f"domain không được import framework/ORM/HTTP: '{module}'"))
             if root == package_root.name:
                 target = module.split(".")[1] if module.count(".") >= 1 else None
                 if target in ALLOWED_LAYER_IMPORTS and target != layer:

@@ -97,32 +97,24 @@ def handlers() -> MaterialHttpHandlers:
         CLASS_1: {"id": CLASS_1, "branch_id": BRANCH_A},
         CLASS_2: {"id": CLASS_2, "branch_id": BRANCH_A},
     }
-    service = MaterialService(
-        FakeClassRepo(classes), FakeMaterialRepo(), FakeBlobStorage(), NullAudit()
-    )
+    service = MaterialService(FakeClassRepo(classes), FakeMaterialRepo(), FakeBlobStorage(), NullAudit())
     return MaterialHttpHandlers(service)
 
 
 def test_upload_thanh_cong_201_khong_lo_object_key(handlers: MaterialHttpHandlers):
-    result = handlers.upload_material(
-        ctx_teacher(), CLASS_1, filename="bai1.pdf", content=REAL_PDF
-    )
+    result = handlers.upload_material(ctx_teacher(), CLASS_1, filename="bai1.pdf", content=REAL_PDF)
     assert result.status == 201
     assert "object_key" not in result.body
 
 
 def test_upload_magic_bytes_khong_khop_tra_415(handlers: MaterialHttpHandlers):
-    result = handlers.upload_material(
-        ctx_teacher(), CLASS_1, filename="bai1.pdf", content=FAKE_PDF_FROM_HTML
-    )
+    result = handlers.upload_material(ctx_teacher(), CLASS_1, filename="bai1.pdf", content=FAKE_PDF_FROM_HTML)
     assert result.status == 415
     assert result.body["type"] == "https://qlkh/errors/unsupported-media-type"
 
 
 def test_upload_lop_khong_phu_trach_tra_403(handlers: MaterialHttpHandlers):
-    result = handlers.upload_material(
-        ctx_teacher(), CLASS_2, filename="bai1.pdf", content=REAL_PDF
-    )
+    result = handlers.upload_material(ctx_teacher(), CLASS_2, filename="bai1.pdf", content=REAL_PDF)
     assert result.status == 403
 
 
@@ -134,9 +126,7 @@ def test_download_khong_ton_tai_tra_404(handlers: MaterialHttpHandlers):
 def test_download_thanh_cong_302_co_location_va_content_disposition(
     handlers: MaterialHttpHandlers,
 ):
-    upload_result = handlers.upload_material(
-        ctx_teacher(), CLASS_1, filename="bai1.pdf", content=REAL_PDF
-    )
+    upload_result = handlers.upload_material(ctx_teacher(), CLASS_1, filename="bai1.pdf", content=REAL_PDF)
     material_id = upload_result.body["id"]
 
     result = handlers.download_material(ctx_teacher(), material_id)

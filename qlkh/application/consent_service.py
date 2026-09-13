@@ -28,9 +28,7 @@ from typing import Any, Protocol
 from qlkh.application.repository_ports import ConsentRepository
 from qlkh.domain.subject_context import SubjectContext
 
-VALID_PURPOSES: frozenset[str] = frozenset(
-    {"service_delivery", "notification", "photo_publication"}
-)
+VALID_PURPOSES: frozenset[str] = frozenset({"service_delivery", "notification", "photo_publication"})
 
 
 class AuditSink(Protocol):
@@ -83,8 +81,7 @@ class ConsentService:
         # (client gộp nhiều mục đích), hoặc chuỗi rỗng, hoặc ngoài enum -> 422.
         if not isinstance(purpose, str) or purpose not in VALID_PURPOSES:
             raise InvalidConsentInput(
-                "purpose phải là đúng một giá trị trong "
-                f"{sorted(VALID_PURPOSES)}, nhận được: {purpose!r}"
+                f"purpose phải là đúng một giá trị trong {sorted(VALID_PURPOSES)}, nhận được: {purpose!r}"
             )
 
         student_ref = self._consents.get_student_ref(ctx, student_id)
@@ -151,6 +148,5 @@ class ConsentService:
                 purpose=purpose,
             )
             raise ConsentWithdrawn(
-                f"đồng ý cho mục đích '{purpose}' của học viên {student_id} "
-                "đã bị rút hoặc chưa từng được cấp"
+                f"đồng ý cho mục đích '{purpose}' của học viên {student_id} đã bị rút hoặc chưa từng được cấp"
             )

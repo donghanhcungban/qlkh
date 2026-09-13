@@ -124,12 +124,15 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install uv==0.4.29
-      - run: uv pip compile pyproject.toml --generate-hashes --python-version "${{ env.PYTHON_VERSION }}" -o requirements.lock.generated
+      - run: uv pip compile pyproject.toml --generate-hashes --no-header --python-version "${{ env.PYTHON_VERSION }}" -o requirements.lock.generated
       - name: requirements.lock phải khớp pyproject.toml
         run: |
           set -euo pipefail
+          # --no-header: uv nhúng chính lệnh gọi (kèm -o requirements.lock.generated) vào
+          # header khi có header, nên hai file KHÔNG BAO GIỜ khớp ở hai dòng đầu dù nội dung
+          # phụ thuộc giống nhau — bỏ header, diff thẳng phần phụ thuộc.
           if ! diff -u requirements.lock requirements.lock.generated; then
-            echo "::error::requirements.lock lệch so với pyproject.toml (ADR-0014). Chạy lại: uv pip compile pyproject.toml --generate-hashes --python-version ${{ env.PYTHON_VERSION }} -o requirements.lock" >&2
+            echo "::error::requirements.lock lệch so với pyproject.toml (ADR-0014). Chạy lại: uv pip compile pyproject.toml --generate-hashes --no-header --python-version ${{ env.PYTHON_VERSION }} -o requirements.lock" >&2
             exit 1
           fi
 

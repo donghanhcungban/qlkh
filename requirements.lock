@@ -1,7 +1,3 @@
-# Lockfile runtime của QLKH — CI cài ở chế độ frozen + --require-hashes, lệch lockfile là fail.
-# Sinh bằng: uv pip compile pyproject.toml --generate-hashes --python-version 3.12 -o requirements.lock
-# (PYTHON_VERSION của CI). Đổi phụ thuộc → sửa pyproject.toml rồi chạy lại lệnh trên, không sửa tay.
-# SPDX từng gói: THIRD-PARTY.md.
 argon2-cffi==25.1.0 \
     --hash=sha256:694ae5cc8a42f4c4e2bf2ca0e64e51e23a040c6a517a85074683d3959e1346c1 \
     --hash=sha256:fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741

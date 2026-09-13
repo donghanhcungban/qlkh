@@ -102,9 +102,7 @@ class MaterialService:
         if not ctx.can_access_class(class_id, record["branch_id"]):
             # Trong cơ sở nhưng ctx không có quyền (giáo viên không phụ
             # trách, phụ huynh không có con ghi danh active) -> 403.
-            raise ClassPermissionDenied(
-                f"user {ctx.user_id} (role={ctx.role}) không có quyền lớp {class_id}"
-            )
+            raise ClassPermissionDenied(f"user {ctx.user_id} (role={ctx.role}) không có quyền lớp {class_id}")
         return record
 
     # ------------------------------------------------------------------ #
@@ -121,17 +119,13 @@ class MaterialService:
         self._get_class_or_raise(ctx, class_id)
 
         if len(content) > MAX_SIZE_BYTES:
-            raise FileTooLarge(
-                f"tệp {len(content)} bytes vượt tối đa {MAX_SIZE_BYTES} bytes"
-            )
+            raise FileTooLarge(f"tệp {len(content)} bytes vượt tối đa {MAX_SIZE_BYTES} bytes")
 
         # Chỉ tin magic bytes của NỘI DUNG tệp — không tin đuôi tệp hay
         # Content-Type client gửi (ADR-005, QLKH-T-05).
         mime_type = sniff_mime_type(content)
         if mime_type is None or mime_type not in ALLOWED_MIME_TYPES:
-            raise UnsupportedFileType(
-                f"magic bytes không khớp allowlist MIME cho phép (filename={filename!r})"
-            )
+            raise UnsupportedFileType(f"magic bytes không khớp allowlist MIME cho phép (filename={filename!r})")
 
         object_key = generate_object_key()
         self._blobs.put_object(object_key, content, content_type=mime_type)
@@ -156,9 +150,7 @@ class MaterialService:
     # ------------------------------------------------------------------ #
     # GET /materials/{id}/download
     # ------------------------------------------------------------------ #
-    def get_download_url(
-        self, ctx: SubjectContext, material_id: str
-    ) -> tuple[dict[str, Any], str]:
+    def get_download_url(self, ctx: SubjectContext, material_id: str) -> tuple[dict[str, Any], str]:
         material = self._materials.get_by_id(ctx, material_id)
         if material is None:
             raise MaterialNotFound(material_id)

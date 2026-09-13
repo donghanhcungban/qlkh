@@ -86,9 +86,7 @@ class AttendanceService:
             raise ClassNotFound(class_id)
         if not ctx.can_access_class(class_id, record["branch_id"]):
             # Trong cơ sở nhưng không phụ trách lớp này -> 403.
-            raise ClassPermissionDenied(
-                f"user {ctx.user_id} (role={ctx.role}) không phụ trách lớp {class_id}"
-            )
+            raise ClassPermissionDenied(f"user {ctx.user_id} (role={ctx.role}) không phụ trách lớp {class_id}")
         return record
 
     # ------------------------------------------------------------------ #
@@ -120,9 +118,7 @@ class AttendanceService:
             normalized.append({"student_id": str(student_id), "status": status})
 
         attendance_at = self._clock()
-        records = self._attendance.bulk_insert(
-            ctx, class_id, normalized, attendance_at=attendance_at
-        )
+        records = self._attendance.bulk_insert(ctx, class_id, normalized, attendance_at=attendance_at)
         self._audit.record(
             "attendance.bulk_recorded",
             class_id=class_id,
@@ -145,9 +141,5 @@ class AttendanceService:
         self._get_class_or_raise(ctx, class_id)
         effective_limit = DEFAULT_LIMIT if limit is None else limit
         if effective_limit < 1 or effective_limit > MAX_LIMIT:
-            raise InvalidPagination(
-                f"limit phải trong [1, {MAX_LIMIT}], nhận {effective_limit}"
-            )
-        return self._attendance.list_for_class(
-            ctx, class_id, cursor=cursor, limit=effective_limit
-        )
+            raise InvalidPagination(f"limit phải trong [1, {MAX_LIMIT}], nhận {effective_limit}")
+        return self._attendance.list_for_class(ctx, class_id, cursor=cursor, limit=effective_limit)

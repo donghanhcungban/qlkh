@@ -141,9 +141,7 @@ def test_gherkin1_rollback_0002_khong_loi(clean_schema):
     # Xác nhận bảng không còn
     r2 = _psql("SELECT to_regclass('public.students');", clean_schema)
     assert r2.returncode == 0
-    assert "NULL" in r2.stdout or "(null)" in r2.stdout.lower(), (
-        "Bảng students vẫn còn sau rollback 0002"
-    )
+    assert "NULL" in r2.stdout or "(null)" in r2.stdout.lower(), "Bảng students vẫn còn sau rollback 0002"
 
 
 def test_gherkin1_apply_rollback_full_cycle(clean_schema):
@@ -194,9 +192,7 @@ def test_pg_phone_key_version_null_duoc_phep(clean_schema):
     );
     """
     r = _psql(insert_sql, clean_schema)
-    assert r.returncode == 0, (
-        f"INSERT với phone_key_version=NULL phải thành công ở expand phase:\n{r.stderr}"
-    )
+    assert r.returncode == 0, f"INSERT với phone_key_version=NULL phải thành công ở expand phase:\n{r.stderr}"
 
 
 def test_pg_phone_key_version_invalid_bi_reject(clean_schema):
@@ -204,10 +200,13 @@ def test_pg_phone_key_version_invalid_bi_reject(clean_schema):
     _psql_file(MIGRATIONS_DIR / "0002_core_schema.up.sql", clean_schema)
     _psql_file(MIGRATIONS_DIR / "0003_pii_key_and_consent.up.sql", clean_schema)
 
-    _psql("""
+    _psql(
+        """
     INSERT INTO branches (id, code, name) VALUES
         ('00000000-0000-0000-0000-000000000001', 'BR01', 'Chi nhanh test');
-    """, clean_schema)
+    """,
+        clean_schema,
+    )
 
     insert_sql = r"""
     INSERT INTO parents (id, branch_id, full_name, phone_enc, phone_last4, phone_key_version)
@@ -232,55 +231,74 @@ def test_pg_phone_key_version_invalid_bi_reject(clean_schema):
 def test_pg_role_code_invalid_bi_reject(clean_schema):
     """users.role_code không hợp lệ bị FK/CHECK reject."""
     _psql_file(MIGRATIONS_DIR / "0002_core_schema.up.sql", clean_schema)
-    _psql("""
+    _psql(
+        """
     INSERT INTO roles (code, description) VALUES ('admin', 'Quan tri');
-    """, clean_schema)
-    r = _psql("""
+    """,
+        clean_schema,
+    )
+    r = _psql(
+        """
     INSERT INTO users (email, password_hash, role_code)
     VALUES ('test@ex.com', 'hash', 'superuser');
-    """, clean_schema)
+    """,
+        clean_schema,
+    )
     assert r.returncode != 0, "role_code='superuser' phải bị reject (không có trong roles)"
 
 
 def test_pg_relation_invalid_bi_reject(clean_schema):
     """parent_student.relation không trong (father, mother, guardian) bị reject."""
     _psql_file(MIGRATIONS_DIR / "0002_core_schema.up.sql", clean_schema)
-    _psql("""
+    _psql(
+        """
     INSERT INTO branches (id, code, name) VALUES ('00000000-0000-0000-0000-000000000001','BR01','Test');
     INSERT INTO students (id, branch_id, full_name, date_of_birth)
     VALUES ('00000000-0000-0000-0000-000000000010','00000000-0000-0000-0000-000000000001','Hoc vien','2010-01-01');
     INSERT INTO parents (id, branch_id, full_name, phone_enc, phone_last4)
     VALUES ('00000000-0000-0000-0000-000000000020','00000000-0000-0000-0000-000000000001','PH',
             decode(repeat('ab',32),'hex'),'1234');
-    """, clean_schema)
-    r = _psql("""
+    """,
+        clean_schema,
+    )
+    r = _psql(
+        """
     INSERT INTO parent_student (parent_id, student_id, relation)
     VALUES ('00000000-0000-0000-0000-000000000020',
             '00000000-0000-0000-0000-000000000010',
             'sibling');
-    """, clean_schema)
+    """,
+        clean_schema,
+    )
     assert r.returncode != 0, "relation='sibling' phải bị CHECK reject"
 
 
 def test_pg_classes_name_unique_per_branch(clean_schema):
     """UNIQUE(branch_id, name) trên classes — tên lớp trùng trong cùng cơ sở bị reject."""
     _psql_file(MIGRATIONS_DIR / "0002_core_schema.up.sql", clean_schema)
-    _psql("""
+    _psql(
+        """
     INSERT INTO branches (id, code, name) VALUES ('00000000-0000-0000-0000-000000000001','BR01','Test');
     INSERT INTO classes (id, branch_id, name)
     VALUES ('00000000-0000-0000-0000-000000000030','00000000-0000-0000-0000-000000000001','Lop A');
-    """, clean_schema)
-    r = _psql("""
+    """,
+        clean_schema,
+    )
+    r = _psql(
+        """
     INSERT INTO classes (id, branch_id, name)
     VALUES ('00000000-0000-0000-0000-000000000031','00000000-0000-0000-0000-000000000001','Lop A');
-    """, clean_schema)
+    """,
+        clean_schema,
+    )
     assert r.returncode != 0, "Tên lớp trùng trong cùng branch phải bị UNIQUE reject"
 
 
 def test_pg_enrollments_unique_class_student(clean_schema):
     """UNIQUE(class_id, student_id) trên enrollments — ghi danh trùng bị reject (→ 409)."""
     _psql_file(MIGRATIONS_DIR / "0002_core_schema.up.sql", clean_schema)
-    _psql("""
+    _psql(
+        """
     INSERT INTO branches (id, code, name) VALUES ('00000000-0000-0000-0000-000000000001','BR01','Test');
     INSERT INTO students (id, branch_id, full_name, date_of_birth)
     VALUES ('00000000-0000-0000-0000-000000000010','00000000-0000-0000-0000-000000000001','HV','2010-01-01');
@@ -290,13 +308,18 @@ def test_pg_enrollments_unique_class_student(clean_schema):
     VALUES ('00000000-0000-0000-0000-000000000040',
             '00000000-0000-0000-0000-000000000030',
             '00000000-0000-0000-0000-000000000010');
-    """, clean_schema)
-    r = _psql("""
+    """,
+        clean_schema,
+    )
+    r = _psql(
+        """
     INSERT INTO enrollments (id, class_id, student_id)
     VALUES ('00000000-0000-0000-0000-000000000041',
             '00000000-0000-0000-0000-000000000030',
             '00000000-0000-0000-0000-000000000010');
-    """, clean_schema)
+    """,
+        clean_schema,
+    )
     assert r.returncode != 0, "Ghi danh trùng phải bị UNIQUE reject"
 
 
@@ -310,10 +333,13 @@ def test_gherkin3_query_branch_id_dung_index(clean_schema):
     _psql_file(MIGRATIONS_DIR / "0002_core_schema.up.sql", clean_schema)
 
     # Tạo branch
-    _psql("""
+    _psql(
+        """
     INSERT INTO branches (id, code, name) VALUES
         ('00000000-0000-0000-0000-000000000001', 'BR01', 'Chi nhanh 1');
-    """, clean_schema)
+    """,
+        clean_schema,
+    )
 
     # Seed 1.200 học viên
     seed_sql = """
@@ -346,30 +372,34 @@ def test_gherkin3_query_branch_id_dung_index(clean_schema):
     assert "seq scan on students" not in plan, (
         f"Truy vấn theo branch_id dùng Seq Scan — index không được dùng:\n{r.stdout}"
     )
-    assert "index" in plan, (
-        f"EXPLAIN plan không dùng bất kỳ index nào:\n{r.stdout}"
-    )
+    assert "index" in plan, f"EXPLAIN plan không dùng bất kỳ index nào:\n{r.stdout}"
 
 
 def test_gherkin3_query_classes_branch_id_dung_index(clean_schema):
     """GET /classes — truy vấn theo branch_id không seq scan."""
     _psql_file(MIGRATIONS_DIR / "0002_core_schema.up.sql", clean_schema)
-    _psql("""
+    _psql(
+        """
     INSERT INTO branches (id, code, name) VALUES
         ('00000000-0000-0000-0000-000000000001', 'BR01', 'Chi nhanh 1');
     INSERT INTO classes (id, branch_id, name)
     SELECT gen_random_uuid(), '00000000-0000-0000-0000-000000000001', 'Lop ' || i
     FROM generate_series(1, 100) AS s(i);
-    """, clean_schema)
+    """,
+        clean_schema,
+    )
     _psql("ANALYZE classes;", clean_schema)
 
-    r = _psql("""
+    r = _psql(
+        """
     EXPLAIN SELECT id, name, branch_id, created_at
     FROM classes
     WHERE branch_id = '00000000-0000-0000-0000-000000000001'
     ORDER BY created_at DESC, id DESC
     LIMIT 50;
-    """, clean_schema)
+    """,
+        clean_schema,
+    )
     assert r.returncode == 0, r.stderr
     plan = r.stdout.lower()
     assert "seq scan on classes" not in plan, f"Truy vấn classes theo branch_id dùng Seq Scan:\n{r.stdout}"

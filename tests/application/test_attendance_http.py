@@ -105,9 +105,7 @@ def service(classes):
 
 
 def make_handlers(service, *, account_limit=120, ip_limit=600):
-    account_limiter = InMemoryRateLimiter(
-        RateLimitPolicy(limit=account_limit, window=timedelta(minutes=1))
-    )
+    account_limiter = InMemoryRateLimiter(RateLimitPolicy(limit=account_limit, window=timedelta(minutes=1)))
     ip_limiter = InMemoryRateLimiter(RateLimitPolicy(limit=ip_limit, window=timedelta(minutes=1)))
     return AttendanceHttpHandlers(
         service, account_limiter=account_limiter, ip_limiter=ip_limiter, clock=lambda: FIXED_NOW
@@ -139,17 +137,11 @@ class TestBulkAttendanceHttp:
         )
         assert result.status == 403
 
-    def test_diem_danh_thanh_cong_201_bo_qua_attendance_at_lui_ngay(
-        self, handlers, ctx_teacher_class1
-    ):
+    def test_diem_danh_thanh_cong_201_bo_qua_attendance_at_lui_ngay(self, handlers, ctx_teacher_class1):
         result = handlers.bulk_attendance(
             ctx_teacher_class1,
             CLASS_1,
-            {
-                "entries": [
-                    {"student_id": STUDENT_A, "status": "present", "attendance_at": BACKDATED}
-                ]
-            },
+            {"entries": [{"student_id": STUDENT_A, "status": "present", "attendance_at": BACKDATED}]},
             ip="10.0.0.1",
         )
         assert result.status == 201

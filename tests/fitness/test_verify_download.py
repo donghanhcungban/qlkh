@@ -13,9 +13,7 @@ PINS_PATH = REPO_ROOT / "ci/tool-checksums.txt"
 
 
 def test_url_khong_khai_bao_bi_chan():
-    assert verify("aa", "u", {}, None) == [
-        "u: chưa khai báo trong ci/tool-checksums.txt (fail-closed)"
-    ]
+    assert verify("aa", "u", {}, None) == ["u: chưa khai báo trong ci/tool-checksums.txt (fail-closed)"]
 
 
 def test_unpinned_bi_chan_du_co_checksums_release():

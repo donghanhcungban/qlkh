@@ -79,9 +79,7 @@ class ClassService:
     ) -> tuple[list[dict[str, Any]], str | None]:
         effective_limit = DEFAULT_LIMIT if limit is None else limit
         if effective_limit < 1 or effective_limit > MAX_LIMIT:
-            raise InvalidPagination(
-                f"limit phải trong [1, {MAX_LIMIT}], nhận {effective_limit}"
-            )
+            raise InvalidPagination(f"limit phải trong [1, {MAX_LIMIT}], nhận {effective_limit}")
         return self._repo.list_for_branch(ctx, cursor=cursor, limit=effective_limit)
 
     # ------------------------------------------------------------------ #
@@ -100,9 +98,7 @@ class ClassService:
         # (contract createClass trả 403 — kiểm ở service, không phải mass-assign
         # branch_id: repository luôn gán branch_id từ ctx, không từ client).
         if ctx.role not in ("staff", "admin"):
-            raise ClassPermissionDenied(
-                f"role {ctx.role} không được tạo lớp"
-            )
+            raise ClassPermissionDenied(f"role {ctx.role} không được tạo lớp")
         return self._repo.create(ctx, name=name, teacher_id=teacher_id)
 
     # ------------------------------------------------------------------ #
@@ -116,9 +112,7 @@ class ClassService:
         if not ctx.can_access_class(class_id, record["branch_id"]):
             # Trong cơ sở nhưng không thuộc related_class_ids của phiên (giáo
             # viên không phụ trách lớp này) — Gherkin của ticket: 403.
-            raise ClassPermissionDenied(
-                f"user {ctx.user_id} (role={ctx.role}) không phụ trách lớp {class_id}"
-            )
+            raise ClassPermissionDenied(f"user {ctx.user_id} (role={ctx.role}) không phụ trách lớp {class_id}")
         return record
 
     # ------------------------------------------------------------------ #
@@ -139,9 +133,7 @@ class ClassService:
         try:
             record = self._repo.enroll(ctx, class_id, student_id, enrolled_at=enrolled_at)
         except EnrollmentConflict as exc:
-            raise EnrollmentAlreadyExists(
-                f"student {student_id} đã ghi danh lớp {class_id}"
-            ) from exc
+            raise EnrollmentAlreadyExists(f"student {student_id} đã ghi danh lớp {class_id}") from exc
         self._audit.record(
             "class.enrollment.created",
             actor_id=ctx.user_id,

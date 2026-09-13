@@ -46,9 +46,7 @@ class ErasureHttpHandlers:
     def create_erasure_request(self, ctx: SubjectContext, raw_body: dict[str, Any]) -> HttpResult:
         subject_student_id = raw_body.get("subject_student_id", "")
         try:
-            record = self._service.create_erasure_request(
-                ctx, subject_student_id=subject_student_id
-            )
+            record = self._service.create_erasure_request(ctx, subject_student_id=subject_student_id)
         except InvalidErasureInput as exc:
             return _problem(422, "unprocessable", "Unprocessable", str(exc))
         except ErasureNotAuthorized:

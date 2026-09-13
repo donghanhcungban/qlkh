@@ -71,10 +71,7 @@ class SqlStudentRepository:
 
     def get_by_id(self, ctx: SubjectContext, student_id: str) -> dict[str, Any] | None:
         branch_clause, branch_params = _branch_filter_clause(ctx)
-        sql = (
-            f"SELECT {_STUDENT_COLUMNS} FROM students "
-            f"WHERE id = %s AND deleted_at IS NULL AND ({branch_clause})"
-        )
+        sql = f"SELECT {_STUDENT_COLUMNS} FROM students WHERE id = %s AND deleted_at IS NULL AND ({branch_clause})"
         rows = self._conn.execute(sql, (student_id, *branch_params))
         if not rows:
             return None

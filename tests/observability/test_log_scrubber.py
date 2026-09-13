@@ -55,9 +55,7 @@ class TestScrubLogRecordAcceptance1:
         assert "some_unexpected_field" not in out
 
     def test_message_free_text_phone_and_email_masked(self):
-        out = scrub_log_record(
-            {"event": "err", "message": "user 0987654321 with email a@b.com failed"}
-        )
+        out = scrub_log_record({"event": "err", "message": "user 0987654321 with email a@b.com failed"})
         assert "0987654321" not in out["message"]
         assert "a@b.com" not in out["message"]
 

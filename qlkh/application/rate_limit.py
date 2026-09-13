@@ -65,11 +65,7 @@ class InMemoryRateLimiter:
 
     def hit(self, key: str, now: datetime) -> int | None:
         window = self._windows.get(key)
-        if (
-            window is None
-            or window.window_started_at is None
-            or now - window.window_started_at >= self._policy.window
-        ):
+        if window is None or window.window_started_at is None or now - window.window_started_at >= self._policy.window:
             window = _Window(count=0, window_started_at=now)
         window.count += 1
         self._windows[key] = window

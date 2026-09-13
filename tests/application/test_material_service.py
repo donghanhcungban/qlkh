@@ -122,9 +122,7 @@ def classes() -> dict[str, dict[str, Any]]:
 
 @pytest.fixture()
 def service(classes):
-    return MaterialService(
-        FakeClassRepo(classes), FakeMaterialRepo(), FakeBlobStorage(), RecordingAudit()
-    )
+    return MaterialService(FakeClassRepo(classes), FakeMaterialRepo(), FakeBlobStorage(), RecordingAudit())
 
 
 def ctx_teacher() -> SubjectContext:
@@ -166,9 +164,7 @@ def ctx_staff_branch_b() -> SubjectContext:
 
 
 def test_upload_pdf_that_thanh_cong(service: MaterialService):
-    record = service.upload_material(
-        ctx_teacher(), CLASS_1, filename="bai1.pdf", content=REAL_PDF
-    )
+    record = service.upload_material(ctx_teacher(), CLASS_1, filename="bai1.pdf", content=REAL_PDF)
     assert record["mime_type"] == "application/pdf"
     assert record["class_id"] == CLASS_1
     assert record["object_key"] != "bai1.pdf"  # không suy từ filename (ADR-005)
@@ -177,31 +173,23 @@ def test_upload_pdf_that_thanh_cong(service: MaterialService):
 def test_upload_pdf_gia_doi_duoi_tu_html_bi_tu_choi_415(service: MaterialService):
     """G1: .pdf đổi đuôi từ .html -> magic bytes không khớp -> 415."""
     with pytest.raises(UnsupportedFileType):
-        service.upload_material(
-            ctx_teacher(), CLASS_1, filename="bai1.pdf", content=FAKE_PDF_FROM_HTML
-        )
+        service.upload_material(ctx_teacher(), CLASS_1, filename="bai1.pdf", content=FAKE_PDF_FROM_HTML)
 
 
 def test_upload_lop_khong_ton_tai_hoac_ngoai_co_so_404(service: MaterialService):
     with pytest.raises(ClassNotFound):
-        service.upload_material(
-            ctx_staff_branch_b(), CLASS_1, filename="bai1.pdf", content=REAL_PDF
-        )
+        service.upload_material(ctx_staff_branch_b(), CLASS_1, filename="bai1.pdf", content=REAL_PDF)
 
 
 def test_upload_giao_vien_khong_phu_trach_lop_403(service: MaterialService):
     with pytest.raises(ClassPermissionDenied):
-        service.upload_material(
-            ctx_teacher(), CLASS_2, filename="bai1.pdf", content=REAL_PDF
-        )
+        service.upload_material(ctx_teacher(), CLASS_2, filename="bai1.pdf", content=REAL_PDF)
 
 
 def test_upload_tep_vuot_kich_thuoc_422(service: MaterialService):
     oversized = b"%PDF-1.4\n" + b"0" * (MAX_SIZE_BYTES + 1)
     with pytest.raises(FileTooLarge):
-        service.upload_material(
-            ctx_teacher(), CLASS_1, filename="bai1.pdf", content=oversized
-        )
+        service.upload_material(ctx_teacher(), CLASS_1, filename="bai1.pdf", content=oversized)
 
 
 def test_upload_khong_luu_object_key_theo_filename(service: MaterialService):
@@ -215,9 +203,7 @@ def test_upload_khong_luu_object_key_theo_filename(service: MaterialService):
 # ---------------------------------------------------------------------------
 
 
-def test_download_thanh_cong_tra_url_ky_ttl_toi_da_15_phut(
-    classes: dict[str, dict[str, Any]]
-):
+def test_download_thanh_cong_tra_url_ky_ttl_toi_da_15_phut(classes: dict[str, dict[str, Any]]):
     material_repo = FakeMaterialRepo()
     material_repo.seed(
         {
@@ -253,9 +239,7 @@ def test_download_nguoi_khong_ghi_danh_lop_403(classes: dict[str, dict[str, Any]
             "object_key": "random-key-abc",
         }
     )
-    service = MaterialService(
-        FakeClassRepo(classes), material_repo, FakeBlobStorage(), RecordingAudit()
-    )
+    service = MaterialService(FakeClassRepo(classes), material_repo, FakeBlobStorage(), RecordingAudit())
     with pytest.raises(MaterialPermissionDenied):
         service.get_download_url(ctx_parent_not_enrolled(), "material-1")
 
@@ -272,18 +256,14 @@ def test_download_phu_huynh_co_con_ghi_danh_thanh_cong(classes: dict[str, dict[s
             "object_key": "random-key-abc",
         }
     )
-    service = MaterialService(
-        FakeClassRepo(classes), material_repo, FakeBlobStorage(), RecordingAudit()
-    )
+    service = MaterialService(FakeClassRepo(classes), material_repo, FakeBlobStorage(), RecordingAudit())
     material, url = service.get_download_url(ctx_parent_enrolled(), "material-1")
     assert material["id"] == "material-1"
     assert url
 
 
 def test_download_material_khong_ton_tai_404(classes: dict[str, dict[str, Any]]):
-    service = MaterialService(
-        FakeClassRepo(classes), FakeMaterialRepo(), FakeBlobStorage(), RecordingAudit()
-    )
+    service = MaterialService(FakeClassRepo(classes), FakeMaterialRepo(), FakeBlobStorage(), RecordingAudit())
     with pytest.raises(MaterialNotFound):
         service.get_download_url(ctx_teacher(), "khong-ton-tai")
 
@@ -300,8 +280,6 @@ def test_download_lop_ngoai_co_so_404_khong_lo_ton_tai(classes: dict[str, dict[s
             "object_key": "random-key-def",
         }
     )
-    service = MaterialService(
-        FakeClassRepo(classes), material_repo, FakeBlobStorage(), RecordingAudit()
-    )
+    service = MaterialService(FakeClassRepo(classes), material_repo, FakeBlobStorage(), RecordingAudit())
     with pytest.raises(MaterialNotFound):
         service.get_download_url(ctx_teacher(), "material-2")

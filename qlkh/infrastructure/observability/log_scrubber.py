@@ -218,9 +218,7 @@ def scrub_log_record(record: dict[str, Any]) -> dict[str, Any]:
     """
     forbidden_present = [k for k in record if _is_forbidden_key(k)]
     if forbidden_present:
-        raise ForbiddenFieldError(
-            f"log record chứa trường bị cấm tuyệt đối: {sorted(forbidden_present)}"
-        )
+        raise ForbiddenFieldError(f"log record chứa trường bị cấm tuyệt đối: {sorted(forbidden_present)}")
 
     scrubbed: dict[str, Any] = {}
     for key, value in record.items():
@@ -244,9 +242,7 @@ def scrub_for_external_sink(record: dict[str, Any]) -> dict[str, Any]:
     """
     forbidden_present = [k for k in record if _is_forbidden_key(k)]
     if forbidden_present:
-        raise ForbiddenFieldError(
-            f"log record chứa trường bị cấm tuyệt đối: {sorted(forbidden_present)}"
-        )
+        raise ForbiddenFieldError(f"log record chứa trường bị cấm tuyệt đối: {sorted(forbidden_present)}")
 
     scrubbed: dict[str, Any] = {}
     for key, value in record.items():

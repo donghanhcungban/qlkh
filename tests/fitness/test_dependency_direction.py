@@ -45,9 +45,7 @@ def test_domain_import_orm_bi_chan(tmp_path):
 
 def test_domain_import_http_client_bi_chan(tmp_path):
     root = _make_package(tmp_path, {"domain/notify.py": "from httpx import Client\n"})
-    assert [v.message for v in check_package(root)] == [
-        "domain không được import framework/ORM/HTTP: 'httpx'"
-    ]
+    assert [v.message for v in check_package(root)] == ["domain không được import framework/ORM/HTTP: 'httpx'"]
 
 
 def test_domain_import_nguoc_len_application_bi_chan(tmp_path):
