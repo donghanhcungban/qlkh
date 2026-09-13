@@ -59,6 +59,20 @@ def _psql_file(path: Path, dsn: str = PG_DSN) -> subprocess.CompletedProcess:
     )
 
 
+def _psql_scalar(sql: str, dsn: str = PG_DSN) -> str:
+    """Chạy SQL trả một giá trị, đọc bằng -tAc (tuples-only, unaligned): NULL ra chuỗi
+    rỗng, không có khung bảng/header để soi chuỗi nhầm (bẫy đã gặp: format có căn lề
+    của `-c` thường không in chữ "NULL" — trống là NULL, không phải lỗi parse)."""
+    r = subprocess.run(
+        ["psql", dsn, "-tAc", sql, "--no-psqlrc", "-v", "ON_ERROR_STOP=1"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert r.returncode == 0, f"psql lỗi:\n{r.stderr}"
+    return r.stdout.strip()
+
+
 def _check_psql_available() -> bool:
     try:
         r = subprocess.run(["psql", "--version"], capture_output=True, timeout=5)
@@ -139,9 +153,8 @@ def test_gherkin1_rollback_0002_khong_loi(clean_schema):
     r = _psql_file(MIGRATIONS_DIR / "0002_core_schema.down.sql", clean_schema)
     assert r.returncode == 0, f"0002.down.sql lỗi:\n{r.stderr}"
     # Xác nhận bảng không còn
-    r2 = _psql("SELECT to_regclass('public.students');", clean_schema)
-    assert r2.returncode == 0
-    assert "NULL" in r2.stdout or "(null)" in r2.stdout.lower(), "Bảng students vẫn còn sau rollback 0002"
+    scalar = _psql_scalar("SELECT to_regclass('public.students');", clean_schema)
+    assert scalar == "", f"Bảng students vẫn còn sau rollback 0002 (to_regclass trả: {scalar!r})"
 
 
 def test_gherkin1_apply_rollback_full_cycle(clean_schema):
@@ -153,11 +166,8 @@ def test_gherkin1_apply_rollback_full_cycle(clean_schema):
         r = _psql_file(MIGRATIONS_DIR / down, clean_schema)
         assert r.returncode == 0, f"{down} lỗi:\n{r.stderr}"
     # Sau full cycle, không còn bảng nào của schema
-    r = _psql("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';", clean_schema)
-    assert r.returncode == 0
-    assert " 0 " in r.stdout or "|0" in r.stdout or r.stdout.strip().endswith("0"), (
-        f"Vẫn còn bảng sau full cycle rollback:\n{r.stdout}"
-    )
+    scalar = _psql_scalar("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';", clean_schema)
+    assert scalar == "0", f"Vẫn còn bảng sau full cycle rollback: COUNT={scalar!r}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -382,9 +392,13 @@ def test_gherkin3_query_classes_branch_id_dung_index(clean_schema):
         """
     INSERT INTO branches (id, code, name) VALUES
         ('00000000-0000-0000-0000-000000000001', 'BR01', 'Chi nhanh 1');
+    -- 1.200 dòng, cùng số với test students bên trên (đang xanh): 100 dòng là một
+    -- trang heap, Postgres luôn chọn Seq Scan (rẻ hơn Index Scan) dù index tồn tại
+    -- và đúng shape — không phải bug thiếu index, mà bộ dữ liệu test quá nhỏ để
+    -- planner thật có cơ hội chọn khác.
     INSERT INTO classes (id, branch_id, name)
     SELECT gen_random_uuid(), '00000000-0000-0000-0000-000000000001', 'Lop ' || i
-    FROM generate_series(1, 100) AS s(i);
+    FROM generate_series(1, 1200) AS s(i);
     """,
         clean_schema,
     )
