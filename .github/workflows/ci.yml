@@ -194,6 +194,10 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: pipx install semgrep==1.85.0
+      # semgrep -> opentelemetry-instrumentation-requests -> pkg_resources, nhưng venv
+      # pipx tạo trên runner ubuntu-24.04 không còn bundle setuptools mặc định
+      # (ModuleNotFoundError: No module named 'pkg_resources'). Không phải lỗi code.
+      - run: pipx inject semgrep setuptools
       - run: semgrep --error --severity ERROR --config p/ci --config p/python .
 
   sca:
@@ -254,11 +258,16 @@ jobs:
       - run: |
           set -euo pipefail
           url=https://github.com/anchore/syft/releases/download/v1.18.1/syft_1.18.1_linux_amd64.tar.gz
-          curl -sSL -o syft.tar.gz "$url"
-          python tools/verify_download.py syft.tar.gz "$url" --checksums-url \
+          # syft giải nén vào $RUNNER_TEMP, NGOÀI thư mục sẽ scan (`dir:.`) — giải nén
+          # thẳng vào repo trước đây khiến binary cataloger của syft đọc luôn dependency
+          # Go NHÚNG SẴN trong chính binary syft, lẫn vào SBOM của QLKH (đo được: sbom.cdx.json
+          # có ~180 package Go — go-git, docker/*, opencontainers/* — không phải phụ thuộc
+          # của QLKH, và job license fail vì phần lớn không khai license nhúng theo cách syft đọc được).
+          curl -sSL -o "$RUNNER_TEMP/syft.tar.gz" "$url"
+          python tools/verify_download.py "$RUNNER_TEMP/syft.tar.gz" "$url" --checksums-url \
             https://github.com/anchore/syft/releases/download/v1.18.1/syft_1.18.1_checksums.txt
-          tar xzf syft.tar.gz syft
-          ./syft dir:. -o cyclonedx-json=sbom.cdx.json
+          tar xzf "$RUNNER_TEMP/syft.tar.gz" -C "$RUNNER_TEMP" syft
+          "$RUNNER_TEMP/syft" dir:. -o cyclonedx-json=sbom.cdx.json
       # SD-04: gói không có license cũng bị chặn, không chỉ GPL/AGPL/SSPL/BUSL
       - run: python tools/check_licenses.py sbom.cdx.json
 
@@ -272,11 +281,13 @@ jobs:
       - run: |
           set -euo pipefail
           url=https://github.com/anchore/syft/releases/download/v1.18.1/syft_1.18.1_linux_amd64.tar.gz
-          curl -sSL -o syft.tar.gz "$url"
-          python tools/verify_download.py syft.tar.gz "$url" --checksums-url \
+          # Cùng lý do với job `license`: giải nén syft ngoài cây scan (`dir:.`), tránh
+          # binary cataloger tự đọc lại dependency Go nhúng trong chính syft.
+          curl -sSL -o "$RUNNER_TEMP/syft.tar.gz" "$url"
+          python tools/verify_download.py "$RUNNER_TEMP/syft.tar.gz" "$url" --checksums-url \
             https://github.com/anchore/syft/releases/download/v1.18.1/syft_1.18.1_checksums.txt
-          tar xzf syft.tar.gz syft
-          ./syft dir:. -o cyclonedx-json=sbom.cdx.json
+          tar xzf "$RUNNER_TEMP/syft.tar.gz" -C "$RUNNER_TEMP" syft
+          "$RUNNER_TEMP/syft" dir:. -o cyclonedx-json=sbom.cdx.json
       # Tiêu chí 3: artifact luôn kèm SBOM CycloneDX
       - run: python tools/check_sbom.py sbom.cdx.json
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
