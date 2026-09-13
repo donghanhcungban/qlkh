@@ -118,7 +118,7 @@ class GradeService:
         class_id: str,
         *,
         student_id: str,
-        score: float,
+        score: object,
         publish: bool = False,
         reason: str | None = None,
     ) -> dict[str, Any]:

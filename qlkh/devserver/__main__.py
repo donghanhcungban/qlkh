@@ -34,7 +34,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"devserver: lỗi khởi động: {exc}", file=sys.stderr)
         return 1
 
-    host, port = server.server_address[0], server.server_address[1]
+    # server_address[0] có type socket chung (str | bytes) vì stub dùng chung cho cả
+    # AF_UNIX; server này luôn là TCP (host/port), ép str() để mypy không cảnh báo
+    # in nhầm b'...' — không đổi giá trị thật (luôn đã là str với TCP).
+    host, port = str(server.server_address[0]), server.server_address[1]
     print(f"qlkh devserver: http://{host}:{port} (CORS: {args.cors_origin})", file=sys.stderr)
     try:
         server.serve_forever()

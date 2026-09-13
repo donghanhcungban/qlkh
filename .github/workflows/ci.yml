@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: pip install ruff==0.16.6 mypy==1.11.2
+      - run: pip install ruff==0.16.6 mypy==1.11.2 types-PyYAML==6.0.12.20240917
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy qlkh tools
@@ -194,10 +194,13 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: pipx install semgrep==1.85.0
-      # semgrep -> opentelemetry-instrumentation-requests -> pkg_resources, nhưng venv
-      # pipx tạo trên runner ubuntu-24.04 không còn bundle setuptools mặc định
-      # (ModuleNotFoundError: No module named 'pkg_resources'). Không phải lỗi code.
-      - run: pipx inject semgrep setuptools
+      # semgrep -> opentelemetry-instrumentation-requests -> pkg_resources, nhưng
+      # setuptools NHÚNG SẴN trong venv pipx tạo (bản mới trên runner ubuntu-24.04)
+      # đã bỏ pkg_resources — và `pipx inject setuptools` KHÔNG TỰ GHI ĐÈ bản đã có
+      # ("setuptools already seems to be installed... Not modifying"), nên lần trước
+      # bước inject chạy "thành công" mà không đổi gì, semgrep vẫn crash. Cần
+      # --force + pin bản còn pkg_resources.
+      - run: pipx inject semgrep "setuptools==75.6.0" --force
       - run: semgrep --error --severity ERROR --config p/ci --config p/python .
 
   sca:

@@ -73,5 +73,10 @@ class InMemoryRateLimiter:
         self._sweep(keep=key)
         if window.count <= self._policy.limit:
             return None
-        remaining = window.window_started_at + self._policy.window - now
+        # window_started_at không thể None ở đây: nhánh if trên dòng 68 đảm bảo window
+        # vừa được tạo mới với window_started_at=now, hoặc là window cũ đã qua kiểm tra
+        # None/hết hạn — mypy không suy được qua reassignment nên khai rõ bằng assert.
+        started_at = window.window_started_at
+        assert started_at is not None
+        remaining = started_at + self._policy.window - now
         return max(1, int(remaining.total_seconds()))
